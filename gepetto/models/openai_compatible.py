@@ -1,4 +1,5 @@
 import json
+import os
 
 import gepetto.config
 import gepetto.models.model_manager
@@ -38,7 +39,21 @@ class OpenAICompatible(GPT):
     def is_configured_properly() -> bool:
 
         # The plugin is configured properly if the API key is provided, otherwise it should not be shown.
-        return bool(gepetto.config.get_config("OpenAICompatible", "API_KEY"))
+        api_key_set = gepetto.config.get_config("OpenAICompatible", "API_KEY")
+        if not api_key_set:
+            # Check environment variables for the openai api key
+            api_key_set = os.environ.get("OPENAI_API_KEY")
+            # to be safe we also check that the URL is set to the openai api,
+            # because we do not want to send requests to other providers
+            # using the openai api key, which would be a leak
+            base_url = gepetto.config.get_config(
+                "OpenAICompatible",
+                "BASE_URL",
+                "OPENAI_BASE_URL",
+            )
+            if base_url and base_url == "https://api.openai.com/v1":
+                return True
+        return bool(api_key_set)
 
     def __init__(self, model):
         try:
@@ -49,7 +64,9 @@ class OpenAICompatible(GPT):
 
         self.model = model
         api_key = gepetto.config.get_config(
-            "OpenAICompatible", "API_KEY", "SILICONFLOW_API_KEY"
+            "OpenAICompatible",
+            "API_KEY",
+            ["SILICONFLOW_API_KEY", "OPENAI_API_KEY"],
         )
         if not api_key:
             raise ValueError(
@@ -62,7 +79,10 @@ class OpenAICompatible(GPT):
         base_url = gepetto.config.get_config(
             "OpenAICompatible",
             "BASE_URL",
-            "SILICONFLOW_BASE_URL",
+            [
+                "SILICONFLOW_BASE_URL",
+                "OPENAI_BASE_URL",
+            ],
             "https://api.siliconflow.cn/v1",
         )
 
