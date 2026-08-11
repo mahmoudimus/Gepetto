@@ -135,3 +135,60 @@ def test_the_declaration_carries_the_vtable_when_one_was_found():
 def test_read_write_counts_reach_the_declaration():
     layout = {"fields": SL._resolve([access(0, 4, "int"), access(0, 4, "int", is_write=True)])}
     assert "r1/w1" in SL.to_c_declaration(layout)
+
+
+# --- size compatibility rule (hrtng's struct_matches) ------------------------
+
+class _FakeType:
+    """Enough of tinfo_t for the width rule; the IDA-backed paths are tested
+    against the real type library separately."""
+
+    def __init__(self, size, union=False, struct=False, first=None):
+        self._size, self._union, self._struct, self._first = size, union, struct, first
+
+    def get_size(self):
+        return self._size
+
+    def is_union(self):
+        return self._union
+
+    def is_struct(self):
+        return self._struct
+
+
+def test_an_exact_width_match_fits():
+    assert SL._size_fits(4, 4, _FakeType(4))
+
+
+def test_a_mismatched_width_does_not_fit():
+    assert not SL._size_fits(4, 8, _FakeType(8))
+
+
+def test_a_union_member_accepts_any_width():
+    # A union's members vary, so the access width proves nothing against it.
+    assert SL._size_fits(1, 8, _FakeType(8, union=True))
+
+
+def test_an_unknown_width_is_not_treated_as_a_conflict():
+    assert SL._size_fits(0, 8, _FakeType(8))
+    assert SL._size_fits(4, 0, _FakeType(0))
+
+
+def test_a_narrow_access_may_reach_a_nested_struct_first_member(monkeypatch):
+    # 4 bytes read at the offset of a 16-byte struct whose first member is 4
+    # bytes: reaching into the nested type, not a contradiction.
+    inner = _FakeType(4)
+    outer = _FakeType(16, struct=True)
+    monkeypatch.setattr(SL, "_members_of", lambda t: {0: (4, "int", inner)})
+    assert SL._size_fits(4, 16, outer)
+
+
+def test_a_narrow_access_into_a_struct_that_does_not_start_that_way_fails(monkeypatch):
+    outer = _FakeType(16, struct=True)
+    monkeypatch.setattr(SL, "_members_of", lambda t: {0: (8, "_QWORD", _FakeType(8))})
+    assert not SL._size_fits(4, 16, outer)
+
+
+def test_matching_requires_at_least_one_observed_field():
+    assert SL.match_existing_structs({"fields": []}) == []
+    assert SL.match_existing_structs({"fields": [{"offset": 0, "size": 4, "padding": True}]}) == []

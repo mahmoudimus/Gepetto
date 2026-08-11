@@ -19,6 +19,7 @@ import ida_bytes
 import ida_funcs
 import ida_hexrays
 import ida_name
+import ida_typeinf
 import idaapi
 
 from gepetto.ida.utils.thread_helpers import hexrays_available, run_on_main_thread
@@ -113,6 +114,146 @@ def read_vtable(ea, max_methods=256):
         if idaapi.get_first_dref_to(cursor) != idaapi.BADADDR:
             break  # another vtable starts here
     return methods
+
+
+# --- matching against types that already exist -------------------------------
+#
+# Ported from hrtng's recognize_shape/struct_matches. Deriving a fresh struct
+# every time means meeting the same type in thirty functions and manufacturing
+# thirty near-identical definitions, when the answer is already in Local Types.
+
+
+def _members_of(tif):
+    """Byte offset -> (size, type name, tinfo) for one struct.
+
+    udm_t reports offsets and sizes in *bits*; everything else here is bytes.
+    """
+    details = ida_typeinf.udt_type_data_t()
+    if not tif.get_udt_details(details):
+        return None
+    members = {}
+    for member in details:
+        members[member.offset // 8] = (
+            member.size // 8,
+            member.type.dstr() if member.type is not None else "",
+            member.type,
+        )
+    return members
+
+
+def iter_local_structs(max_ordinals=4096):
+    """Every struct in the local type library."""
+    try:
+        limit = min(ida_typeinf.get_ordinal_limit(), max_ordinals)
+    except Exception:
+        return
+    for ordinal in range(1, limit):
+        tif = ida_typeinf.tinfo_t()
+        try:
+            if not tif.get_numbered_type(ordinal, ida_typeinf.BTF_STRUCT, True):
+                continue
+            if not tif.is_struct():
+                continue
+        except Exception:
+            continue
+        yield ordinal, tif
+
+
+def _size_fits(access_size, member_size, member_type):
+    """Whether an access of this width is consistent with this member.
+
+    A union member accepts anything, and an access narrower than the member
+    may be reaching the first field of a nested struct, so that is unwound
+    rather than rejected -- both cases hrtng handles and a naive equality
+    check gets wrong.
+    """
+    if not access_size or not member_size:
+        return True  # unknown width proves nothing either way
+    if access_size == member_size:
+        return True
+    try:
+        if member_type is not None and member_type.is_union():
+            return True
+        current = member_type
+        while (current is not None and current.is_struct()
+               and current.get_size() > access_size):
+            inner = _members_of(current)
+            if not inner or 0 not in inner:
+                return False
+            size, _name, current = inner[0]
+            if size == access_size:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def match_existing_structs(layout, max_results=10):
+    """Types already defined that are consistent with the observed accesses."""
+    observed = [f for f in layout.get("fields", []) if not f.get("padding")]
+    if not observed:
+        return []
+
+    matches = []
+    for ordinal, tif in iter_local_structs():
+        members = _members_of(tif)
+        if not members:
+            continue
+        struct_size = tif.get_size()
+        ok = True
+        for field in observed:
+            offset, access_size = field["offset"], field["size"]
+            # A whole-struct-sized read at 0 may be the object itself.
+            if offset == 0 and access_size and struct_size == access_size:
+                continue
+            if offset not in members:
+                ok = False
+                break
+            member_size, _name, member_type = members[offset]
+            if not _size_fits(access_size, member_size, member_type):
+                ok = False
+                break
+        if ok:
+            matches.append(
+                {
+                    "name": tif.get_type_name() or f"ordinal_{ordinal}",
+                    "ordinal": ordinal,
+                    "size": struct_size,
+                    "members": len(members),
+                    "matched_fields": len(observed),
+                }
+            )
+        if len(matches) >= max_results:
+            break
+    # Fewest members first: the tightest type that still explains the evidence.
+    matches.sort(key=lambda m: (m["members"], m["size"]))
+    return matches
+
+
+def find_structs_by_size(size):
+    """Local types whose total size is exactly this."""
+    found = []
+    for ordinal, tif in iter_local_structs():
+        if tif.get_size() == size:
+            found.append({"name": tif.get_type_name() or f"ordinal_{ordinal}",
+                          "ordinal": ordinal, "size": size})
+    return found
+
+
+def find_structs_by_offset(offset):
+    """Local types with a member at exactly this byte offset."""
+    found = []
+    for ordinal, tif in iter_local_structs():
+        members = _members_of(tif)
+        if members and offset in members:
+            member_size, type_name, _t = members[offset]
+            found.append({
+                "name": tif.get_type_name() or f"ordinal_{ordinal}",
+                "ordinal": ordinal,
+                "member_size": member_size,
+                "member_type": type_name,
+            })
+    return found
 
 
 class _Access:
@@ -435,6 +576,8 @@ def collect_layout(ea=None, argument_index=0, max_depth=DEFAULT_MAX_DEPTH,
         "inferred_size": size,
         "fields": laid_out,
         "scanned_functions": scanned,
+        "matching_types": run_on_main_thread(
+            lambda: match_existing_structs({"fields": laid_out})),
         "vtable": vtable,
         "virtual_call_slots": [
             {"slot_offset_hex": hex(offset), "slot": offset // _pointer_size()}
@@ -442,6 +585,8 @@ def collect_layout(ea=None, argument_index=0, max_depth=DEFAULT_MAX_DEPTH,
         ],
         "limits": {"max_depth": max_depth, "max_functions": max_functions},
         "note": (
+            "Check matching_types before declaring anything new: a type that "
+            "already explains these accesses is almost always the right answer. "
             "Offsets, widths and read/write counts are observed, not guessed. "
             "Gaps marked padding were never accessed by the functions scanned, "
             "so their contents are unknown rather than empty."
