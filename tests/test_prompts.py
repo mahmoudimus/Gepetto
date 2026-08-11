@@ -134,3 +134,16 @@ def test_rename_prompt_asks_for_globals_and_warns_about_their_reach():
     rendered = prompts.render("rename", code="x", locale="en_US")
     assert "qword_140C1A0" in rendered
     assert "changes it everywhere in the database" in rendered
+
+
+def test_generate_struct_prompt_forbids_inventing_the_layout():
+    rendered = prompts.render(
+        "generate_struct", code="int f(){}", locale="en_US",
+        layout="struct s { _QWORD field_10; };",
+    )
+    assert "struct s { _QWORD field_10; };" in rendered
+    assert "derived from the code, not guessed" in rendered
+    assert "do not add fields that" in rendered
+    # Gaps must survive: a hole means unknown, not empty.
+    assert "do not remove the gaps" in rendered
+    assert "$layout" not in rendered

@@ -1,4 +1,5 @@
 import functools
+import json
 import re
 import time
 import textwrap
@@ -12,6 +13,8 @@ import gepetto.config
 from gepetto.ida.context import format_extra_context
 from gepetto.ida.utils.clipboard import copy_to_clipboard
 from gepetto.ida.tools.rename_global import _apply_global_rename
+from gepetto.ida.tools.declare_c_type import declare_c_type
+from gepetto.ida.analysis.struct_layout import collect_layout, to_c_declaration
 from gepetto.ida.prompts import render
 from gepetto.ida.utils.thread_helpers import *
 from gepetto.models.model_manager import instantiate_model
@@ -542,6 +545,147 @@ class CopyContextHandler(idaapi.action_handler_t):
 
         print(report)
         STATUS_PANEL.log(report, category=LogCategory.SYSTEM, level=LogLevel.SUCCESS)
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+
+# -----------------------------------------------------------------------------
+
+def struct_callback(address, argument_index, layout, response, start_time):
+    """Show the model's names against the observed layout, then apply."""
+    text = response.content if hasattr(response, "content") else str(response)
+    try:
+        proposal = json.loads(re.search(r"\{.*}", text, re.DOTALL).group(0))
+    except Exception:
+        error_message = _("[ERROR] struct callback: no valid JSON in the response")
+        print(error_message)
+        STATUS_PANEL.mark_error(error_message)
+        return
+
+    struct_name = str(proposal.get("struct_name") or "struct_from_gepetto").strip()
+    named = proposal.get("fields") or {}
+
+    def _apply():
+        rows = []
+        for field in layout["fields"]:
+            offset = field["offset_hex"]
+            if field.get("padding"):
+                rows.append([offset, field["type"], f"gap_{offset[2:]}[{field['size']}]",
+                             _("never accessed")])
+                continue
+            entry = named.get(offset) or {}
+            if isinstance(entry, str):
+                entry = {"name": entry, "why": ""}
+            name = str(entry.get("name") or f"field_{offset[2:]}").strip()
+            why = str(entry.get("why") or "").strip()
+            rows.append([offset, field["type"], name,
+                         why or _("(no reason given)")])
+
+        class StructChoose(ida_kernwin.Choose):
+            def __init__(self):
+                super().__init__(
+                    _("Struct {name}: fields observed in the code").format(name=struct_name),
+                    [[_("Offset"), 8], [_("Type"), 12], [_("Name"), 24], [_("Why"), 60]],
+                )
+                self.items = rows
+
+            def OnGetLine(self, index):
+                return self.items[index]
+
+            def OnGetSize(self):
+                return len(self.items)
+
+        if StructChoose().Show(modal=True) < 0:
+            return {"applied": False, "cancelled": True}
+
+        members = []
+        for offset, ctype, name, _why in rows:
+            if name.startswith("gap_"):
+                members.append(f"    _BYTE {name};  // {offset}: never accessed")
+            else:
+                members.append(f"    {ctype} {name};  // {offset}")
+        declaration = "struct %s\n{\n%s\n};" % (struct_name, "\n".join(members))
+
+        result = declare_c_type(declaration)
+        return {"applied": True, "cancelled": False, "name": struct_name, "result": result}
+
+    try:
+        outcome = run_on_main_thread(_apply, write=True) or {}
+    except Exception as exc:
+        error_message = _("[ERROR] could not declare the struct: {error}").format(error=str(exc))
+        print(error_message)
+        STATUS_PANEL.mark_error(error_message)
+        return
+
+    if outcome.get("cancelled"):
+        message = _("Struct creation cancelled.")
+    elif outcome.get("applied"):
+        message = _("Declared struct {name} with {count} members.").format(
+            name=outcome.get("name"), count=len(layout["fields"]))
+    else:
+        message = _("Struct was not declared.")
+    print(message)
+    STATUS_PANEL.log(message, category=LogCategory.TOOL, level=LogLevel.SUCCESS)
+    STATUS_PANEL.log_request_finished(time.time() - start_time)
+
+
+class GenerateStructHandler(idaapi.action_handler_t):
+    """Recover a struct from how a pointer argument is used.
+
+    The layout is derived from the ctree and is not up for negotiation; the
+    model is asked only to name the fields and say what they are for. That
+    split is deliberate: offsets and widths are observable, meanings are not.
+    """
+
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+
+    def activate(self, ctx):
+        start_time = time.time()
+        ea = idaapi.get_screen_ea()
+        try:
+            layout = collect_layout(ea=ea, argument_index=0)
+        except Exception as e:
+            message = _("Could not derive a layout: {error}").format(error=str(e))
+            print(message)
+            STATUS_PANEL.mark_error(message)
+            return 1
+
+        real_fields = [f for f in layout["fields"] if not f.get("padding")]
+        if not real_fields:
+            message = _("No field accesses found through the first argument of this function.")
+            print(message)
+            STATUS_PANEL.log(message, category=LogCategory.SYSTEM)
+            return 1
+
+        scanned = len(layout["scanned_functions"])
+        STATUS_PANEL.log(
+            _("Observed {fields} fields across {scanned} functions.").format(
+                fields=len(real_fields), scanned=scanned),
+            category=LogCategory.TOOL,
+        )
+
+        try:
+            decompiled = str(ida_hexrays.decompile(ea))
+        except Exception:
+            decompiled = ""
+
+        gepetto.config.model.query_model_async(
+            render("generate_struct",
+                   code=decompiled,
+                   locale=gepetto.config.get_localization_locale(),
+                   extra_context=format_extra_context(ea),
+                   layout=to_c_declaration(layout) + "\n\n" + json.dumps(
+                       {"fields": [f for f in layout["fields"]],
+                        "scanned_functions": layout["scanned_functions"]},
+                       indent=1)),
+            functools.partial(struct_callback, address=ea, argument_index=0,
+                              layout=layout, start_time=start_time),
+            additional_model_options={"response_format": {"type": "json_object"}})
+        request_sent = STATUS_PANEL.log_request_started()
+        print(request_sent)
         return 1
 
     def update(self, ctx):

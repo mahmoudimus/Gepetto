@@ -242,6 +242,47 @@ $extra_context""",
 )
 
 
+register_prompt(
+    "generate_struct",
+    """You are an expert reverse engineer naming a structure recovered from code.
+- Locale: $locale
+$grounding
+
+The layout below was derived from the code, not guessed: every offset, width
+and read/write count was observed. Do not change them, do not add fields that
+were never accessed, and do not remove the gaps -- a gap means those bytes were
+never touched by the code that was scanned, so their contents are unknown.
+
+Task: name the structure and its fields, and say what each field is for.
+
+- Base each name on how the field is used: what it is compared against, what it
+  is passed to, which function reads it. "reads/writes" tells you a lot -- a
+  field only ever written is likely an output or a cached value; one read in
+  several functions is likely configuration or state.
+- Where a field's type is ambiguous the alternatives observed are listed. Say
+  which you think it is and why.
+- Leave a field named field_<offset> if the evidence does not support better.
+  An invented name is worse than no name.
+
+Output: exactly one JSON object. No Markdown, no code fences, no commentary.
+{"struct_name": "<name>",
+ "fields": {"<offset_hex>": {"name": "<field name>",
+                             "why": "<the evidence>"}},
+ "purpose": "<one sentence on what the structure represents>"}
+
+Offsets are the keys, exactly as given below.
+
+Observed layout:
+$layout
+
+Code that uses it:
+```c
+$code
+```
+$extra_context""",
+)
+
+
 def render(name, *, code="", locale="en_US", extra_context="", **extra):
     """Render a prompt with the arguments every built-in template expects."""
     return get_prompt(

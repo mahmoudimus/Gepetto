@@ -10,6 +10,7 @@ import ida_hexrays  # type: ignore
 import gepetto.config
 from gepetto.ida.handlers import (
     CopyContextHandler,
+    GenerateStructHandler,
     ExplainHandler,
     GenerateCCodeHandler,
     GeneratePythonCodeHandler,
@@ -67,6 +68,8 @@ class GepettoPlugin(idaapi.plugin_t):
     c_code_menu_path = "Edit/Gepetto/" + _("Generate C Code")
     python_code_action_name = "gepetto:generate_python_code"
     python_code_menu_path = "Edit/Gepetto/" + _("Generate Python Code")
+    struct_action_name = "gepetto:generate_struct"
+    struct_menu_path = "Edit/Gepetto/" + _("Generate struct from usage")
     copy_context_action_name = "gepetto:copy_context"
     copy_context_menu_path = "Edit/Gepetto/" + _("Copy context to clipboard")
     auto_show_action_name = "gepetto:toggle_status_panel_auto_show"
@@ -147,11 +150,20 @@ class GepettoPlugin(idaapi.plugin_t):
         )
         idaapi.register_action(generate_c_code_action)
 
+        # Struct recovery: layout from the ctree, names from the model.
+        struct_action = idaapi.action_desc_t(self.struct_action_name,
+                                             _('Generate struct from usage'),
+                                             GenerateStructHandler(),
+                                             "Ctrl+Alt+S",
+                                             _('Derive a struct from how this function uses its first argument'),
+                                             160)
+        idaapi.register_action(struct_action)
+
         # Copy-context action: sends nothing, just shows what would be sent.
         copy_context_action = idaapi.action_desc_t(self.copy_context_action_name,
                                                    _('Copy context to clipboard'),
                                                    CopyContextHandler(),
-                                                   "Ctrl+Alt+C",
+                                                   "Ctrl+Alt+X",
                                                    _('Copy the context Gepetto would send for this function'),
                                                    9)
         idaapi.register_action(copy_context_action)
@@ -161,6 +173,7 @@ class GepettoPlugin(idaapi.plugin_t):
         idaapi.attach_action_to_menu(self.rename_menu_path, self.rename_action_name, idaapi.SETMENU_APP)
         idaapi.attach_action_to_menu(self.c_code_menu_path, self.c_code_action_name, idaapi.SETMENU_APP)
         idaapi.attach_action_to_menu(self.python_code_menu_path, self.python_code_action_name, idaapi.SETMENU_APP)
+        idaapi.attach_action_to_menu(self.struct_menu_path, self.struct_action_name, idaapi.SETMENU_APP)
         idaapi.attach_action_to_menu(self.copy_context_menu_path, self.copy_context_action_name, idaapi.SETMENU_APP)
 
         PLUGIN_INSTANCE = self
@@ -411,6 +424,7 @@ class ContextMenuHooks(idaapi.UI_Hooks):
             idaapi.attach_action_to_popup(widget, popup_handle, GepettoPlugin.rename_action_name, "Gepetto/")
             idaapi.attach_action_to_popup(widget, popup_handle, GepettoPlugin.c_code_action_name, "Gepetto/")
             idaapi.attach_action_to_popup(widget, popup_handle, GepettoPlugin.python_code_action_name, "Gepetto/")
+            idaapi.attach_action_to_popup(widget, popup_handle, GepettoPlugin.struct_action_name, "Gepetto/")
             idaapi.attach_action_to_popup(widget, popup_handle, GepettoPlugin.copy_context_action_name, "Gepetto/")
 
         return 0
