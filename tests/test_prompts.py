@@ -25,7 +25,7 @@ def test_prompts_render_with_the_standard_arguments(name):
     rendered = prompts.render(name, code="int main(){}", locale="en_US", extra_context="")
     assert "int main(){}" in rendered
     # No unsubstituted placeholders left behind.
-    assert "{code}" not in rendered and "{grounding}" not in rendered
+    assert "$code" not in rendered and "$grounding" not in rendered
 
 
 def test_rename_prompt_carries_the_surrounding_context():
@@ -42,7 +42,7 @@ def test_rename_prompt_still_demands_a_bare_json_object():
     rendered = prompts.render("rename", code="x", locale="en_US")
     assert "__function__" in rendered
     assert "JSON object" in rendered
-    # Literal braces survive str.format so the model is shown {} not a crash.
+    # Braces are literal under string.Template, so the model is shown {}.
     assert "{}" in rendered
 
 
@@ -53,7 +53,7 @@ def test_comment_prompt_keeps_its_line_number_contract():
 
 
 def test_registering_a_prompt_overrides_the_built_in(capsys):
-    prompts.register_prompt("rename", "my own wording: {code}")
+    prompts.register_prompt("rename", "my own wording: $code")
     assert prompts.render("rename", code="abc") == "my own wording: abc"
     assert "overridden" in capsys.readouterr().out
 
@@ -71,11 +71,20 @@ def test_unknown_prompt_names_raise():
         prompts.render("no_such_prompt")
 
 
-def test_a_bad_placeholder_degrades_instead_of_raising(capsys):
-    prompts.register_prompt("rename", "uses {not_a_real_field}")
-    # Returns the template rather than cancelling the user's action.
-    assert prompts.render("rename", code="x") == "uses {not_a_real_field}"
-    assert "could not be formatted" in capsys.readouterr().out
+def test_an_unknown_placeholder_is_left_alone_rather_than_raising():
+    # safe_substitute: the typo costs that substitution, not the action.
+    prompts.register_prompt("rename", "uses $not_a_real_field and $code")
+    assert prompts.render("rename", code="x") == "uses $not_a_real_field and x"
+
+
+def test_literal_braces_need_no_escaping():
+    prompts.register_prompt("rename", 'emit {"a": {"b": 1}} for $code')
+    assert prompts.render("rename", code="f()") == 'emit {"a": {"b": 1}} for f()'
+
+
+def test_a_value_containing_braces_or_dollars_is_not_rescanned():
+    prompts.register_prompt("rename", "$code")
+    assert prompts.render("rename", code="jmp $LN10 { }") == "jmp $LN10 { }"
 
 
 def test_a_custom_template_may_ignore_placeholders():
@@ -86,7 +95,7 @@ def test_a_custom_template_may_ignore_placeholders():
 PROMPT_FILE = """
     from gepetto.ida.prompts import register_prompt
 
-    register_prompt("rename", "dropped-in rename prompt for {code}")
+    register_prompt("rename", "dropped-in rename prompt for $code")
 """
 
 
@@ -113,11 +122,9 @@ def test_rename_prompt_asks_for_justified_names():
     rendered = prompts.render("rename", code="int f(){}", locale="en_US")
     assert '"why"' in rendered
     assert "not a restatement of the name" in rendered
-    # The example must survive str.format rather than being eaten as a field.
     assert '"name": "parse_config_line"' in rendered
-    # Doubled braces must collapse to single ones, leaving a usable example and
-    # a literal {} for the empty case. Nested JSON legitimately ends "}}", so
-    # that sequence is not itself evidence of a formatting failure.
+    # The JSON example reaches the model exactly as it should be emitted --
+    # no doubled braces to undo, which is the reason for string.Template.
     assert '{"name": "<proposed name>", "why": "<the evidence for it>"}' in rendered
     assert "Return {} if nothing warrants renaming." in rendered
     assert "{{" not in rendered

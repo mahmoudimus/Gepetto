@@ -6,16 +6,23 @@ meant a code change. They live here as named templates, and a user can replace
 any of them from $IDAUSR/cfg/gepetto/prompts without touching the plugin:
 
     from gepetto.ida.prompts import register_prompt
-    register_prompt("rename", '''...my wording, {code} ...''')
+    register_prompt("rename", '''...my wording, $code ...''')
 
-Templates are formatted with str.format, so literal braces must be doubled.
-Every template is passed the same keyword arguments; unused ones are ignored,
-which means a custom template can drop a placeholder without breaking.
+Rendered with string.Template, so placeholders are $name or ${name} and braces
+are literal. That matters here because these prompts are mostly JSON examples:
+under str.format every brace in them had to be doubled, which made the example
+the model is meant to copy differ from what it should emit.
+
+Substitution is "safe": an unknown $placeholder is left as written rather than
+raising, and substituted values are not rescanned, so decompiled code
+containing braces or a $LN10 label passes through untouched. A custom template
+may use as few placeholders as it likes.
 """
 
 import importlib.util
 import pathlib
 import traceback
+from string import Template
 
 from gepetto.loader import import_module_file, iter_module_files
 
@@ -37,17 +44,17 @@ def register_prompt(name, template):
 def get_prompt(name, **kwargs) -> str:
     """Render a registered prompt.
 
-    A bad placeholder in a user-supplied template returns the unformatted text
-    with a warning rather than raising: a broken prompt should degrade the
-    request, not cancel the action the user asked for.
+    safe_substitute leaves an unrecognised $placeholder in place instead of
+    raising, so a typo in a user-supplied template costs that one substitution
+    rather than the action the user asked for.
     """
     template = PROMPTS.get(name)
     if template is None:
         raise KeyError(f"No prompt registered under {name!r}")
     try:
-        return template.format(**kwargs)
+        return Template(template).safe_substitute(kwargs)
     except Exception as e:
-        print(f"Gepetto: prompt '{name}' could not be formatted ({e!r}); sending it unformatted.")
+        print(f"Gepetto: prompt '{name}' could not be rendered ({e!r}); sending it unrendered.")
         return template
 
 
@@ -91,9 +98,9 @@ _GROUNDING = """- Base every claim solely on the code and context provided. Do n
 register_prompt(
     "explain",
     """You are an expert reverse engineer explaining a decompiled function to a colleague.
-- Locale: {locale}
+- Locale: $locale
 - Output plain text only. No Markdown, no code fences.
-{grounding}
+$grounding
 
 Task: summarise what this function does, then propose a clearer name for it.
 
@@ -107,17 +114,17 @@ Existing Gepetto comments are hints about intent; use them but do not repeat
 them verbatim.
 
 ```c
-{code}
+$code
 ```
-{extra_context}""",
+$extra_context""",
 )
 
 
 register_prompt(
     "rename",
     """You are an expert reverse engineer choosing identifiers for decompiled code.
-- Locale: {locale}
-{grounding}
+- Locale: $locale
+$grounding
 
 Task: propose better names for this function and its local variables.
 
@@ -137,10 +144,10 @@ How to choose a name:
 
 Output: exactly one JSON object. No Markdown, no code fences, no commentary.
 - Keys are the current identifiers. Each value is an object:
-  {{"name": "<proposed name>", "why": "<the evidence for it>"}}
+  {"name": "<proposed name>", "why": "<the evidence for it>"}
 - Use the key "__function__" to rename the function itself.
 - Include an entry only where the new name is a clear improvement.
-- Return {{}} if nothing warrants renaming.
+- Return {} if nothing warrants renaming.
 
 The "why" is not a restatement of the name. Cite what in the code justifies
 it: which call it is passed to, what it is compared against, which field it
@@ -148,28 +155,28 @@ indexes, which caller supplies it. One clause is enough. A name you cannot
 justify from the code in front of you is a name you should not propose.
 
 Example:
-{{"__function__": {{"name": "parse_config_line",
+{"__function__": {"name": "parse_config_line",
                   "why": "splits on '=' and stores into the table its caller
-                          later reads with lookup_setting"}},
- "v7": {{"name": "line_len", "why": "bound of the copy loop, from strlen(a1)"}}}}
+                          later reads with lookup_setting"},
+ "v7": {"name": "line_len", "why": "bound of the copy loop, from strlen(a1)"}}
 
 ```c
-{code}
+$code
 ```
-{extra_context}""",
+$extra_context""",
 )
 
 
 register_prompt(
     "comment",
     """You are an expert reverse engineer annotating decompiled code.
-- Locale: {locale}
-{grounding}
+- Locale: $locale
+$grounding
 
 Task: add comments to the lines that deserve them.
 
 Output: exactly one JSON object mapping integer line number to comment string.
-No Markdown, no code fences, nothing outside the object. Return {{}} if no
+No Markdown, no code fences, nothing outside the object. Return {} if no
 comment is warranted.
 
 Scope and style:
@@ -181,16 +188,16 @@ Scope and style:
   constant means, which error path this is.
 
 ```c
-{code}
+$code
 ```
-{extra_context}""",
+$extra_context""",
 )
 
 
 register_prompt(
     "generate_c",
     """You are an expert reverse engineer reconstructing compilable source.
-{grounding}
+$grounding
 
 Task: rewrite this decompiled function as clean, idiomatic C that a human would
 plausibly have written before compilation.
@@ -201,16 +208,16 @@ plausibly have written before compilation.
 - Output only the code. No explanation, no fences.
 
 ```c
-{code}
+$code
 ```
-{extra_context}""",
+$extra_context""",
 )
 
 
 register_prompt(
     "generate_python",
     """You are an expert reverse engineer porting decompiled code to Python.
-{grounding}
+$grounding
 
 Task: write a Python function that reproduces this function's logic.
 - Prioritise readability over a literal instruction-by-instruction port, but do
@@ -220,9 +227,9 @@ Task: write a Python function that reproduces this function's logic.
 - Output only the code. No explanation, no fences.
 
 ```c
-{code}
+$code
 ```
-{extra_context}""",
+$extra_context""",
 )
 
 
