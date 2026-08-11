@@ -525,6 +525,35 @@ def tool_error_payload(message: str, **context: Any) -> dict[str, Any]:
     return {"type": "error", "error": error}
 
 
+def _resolve_builtin_handler(name):
+    """Find handle_<name>_tc across the tool modules.
+
+    Resolved by scanning rather than by module name: most tools live in a
+    module named after themselves, but list_strings is defined in search.py.
+    """
+    from gepetto.ida import tools as tools_package
+
+    attribute = f"handle_{name}_tc"
+    for module_name in getattr(tools_package, "__all__", []):
+        handler = getattr(getattr(tools_package, module_name, None), attribute, None)
+        if callable(handler):
+            return handler
+    return None
+
+
+def register_builtin_tools():
+    """Register every schema in TOOLS against its conventional handler."""
+    from gepetto.ida.tools.registry import register_tool
+
+    for schema in TOOLS:
+        name = (schema.get("function") or {}).get("name")
+        handler = _resolve_builtin_handler(name)
+        if handler is None:
+            print(f"Gepetto: no handler found for built-in tool '{name}'; skipping.")
+            continue
+        register_tool(schema, handler)
+
+
 def add_result_to_messages(messages, tc, result):
     tc_id = getattr(tc, "id", None) or tc.get("id")
     fn_name = getattr(getattr(tc, "function", None), "name", None) \

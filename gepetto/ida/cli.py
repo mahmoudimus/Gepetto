@@ -7,7 +7,7 @@ import gepetto.config
 import gepetto.ida.handlers
 from gepetto.ida.status_panel.panel_interface import LogCategory, LogLevel
 from gepetto.ida.status_panel.status_panel_factory import get_status_panel
-from gepetto.ida.tools.tools import TOOLS
+from gepetto.ida.tools.registry import dispatch_tool_call, tool_schemas
 import gepetto.ida.tools as ida_tools
 
 _ = gepetto.config._
@@ -164,50 +164,7 @@ class GepettoCLI(ida_kernwin.cli_t):
                 first_tool_name = response.tool_calls[0].function.name
                 STATUS_PANEL.set_status(_("Using tool: {tool_name}").format(tool_name=first_tool_name), busy=True)
                 for tc in response.tool_calls:
-                    if tc.function.name == "get_screen_ea":
-                        ida_tools.get_screen_ea.handle_get_screen_ea_tc(tc, MESSAGES)
-                    elif tc.function.name == "get_current_function":
-                        ida_tools.get_current_function.handle_get_current_function_tc(tc, MESSAGES)
-                    elif tc.function.name == "get_ea":
-                        ida_tools.get_ea.handle_get_ea_tc(tc, MESSAGES)
-                    elif tc.function.name == "decompile_function":
-                        ida_tools.decompile_function.handle_decompile_function_tc(tc, MESSAGES)
-                    elif tc.function.name == "rename_lvar":
-                        ida_tools.rename_lvar.handle_rename_lvar_tc(tc, MESSAGES)
-                    elif tc.function.name == "rename_function":
-                        ida_tools.rename_function.handle_rename_function_tc(tc, MESSAGES)
-                    elif tc.function.name == "set_comment":
-                        ida_tools.set_comment.handle_set_comment_tc(tc, MESSAGES)
-                    elif tc.function.name == "get_xrefs":
-                        ida_tools.get_xrefs.handle_get_xrefs_tc(tc, MESSAGES)
-                    elif tc.function.name == "list_imports":
-                        ida_tools.list_imports.handle_list_imports_tc(tc, MESSAGES)
-                    elif tc.function.name == "list_functions":
-                        ida_tools.list_functions.handle_list_functions_tc(tc, MESSAGES)
-                    elif tc.function.name == "list_symbols":
-                        ida_tools.list_symbols.handle_list_symbols_tc(tc, MESSAGES)
-                    elif tc.function.name == "list_strings":
-                        ida_tools.search.handle_list_strings_tc(tc, MESSAGES)
-                    elif tc.function.name == "search":
-                        ida_tools.search.handle_search_tc(tc, MESSAGES)
-                    elif tc.function.name == "to_hex":
-                        ida_tools.to_hex.handle_to_hex_tc(tc, MESSAGES)
-                    elif tc.function.name == "get_disasm":
-                        ida_tools.get_disasm.handle_get_disasm_tc(tc, MESSAGES)
-                    elif tc.function.name == "disasm_function":
-                        ida_tools.disasm_function.handle_disasm_function_tc(tc, MESSAGES)
-                    elif tc.function.name == "get_bytes":
-                        ida_tools.get_bytes.handle_get_bytes_tc(tc, MESSAGES)
-                    elif tc.function.name == "declare_c_type":
-                        ida_tools.declare_c_type.handle_declare_c_type_tc(tc, MESSAGES)
-                    elif tc.function.name == "get_struct":
-                        ida_tools.get_struct.handle_get_struct_tc(tc, MESSAGES)
-                    elif tc.function.name == "refresh_view":
-                        ida_tools.refresh_view.handle_refresh_view_tc(tc, MESSAGES)
-                    elif tc.function.name == "run_python":
-                        ida_tools.run_python.handle_run_python_tc(tc, MESSAGES)
-                    elif tc.function.name == "rename_global":
-                        ida_tools.rename_global.handle_rename_global_tc(tc, MESSAGES)
+                    dispatch_tool_call(tc, MESSAGES)
                 STATUS_PANEL.start_stream()
                 start_model_interaction()
             else:
@@ -320,7 +277,7 @@ class GepettoCLI(ida_kernwin.cli_t):
                 MESSAGES,
                 on_chunk,
                 stream=True,
-                additional_model_options={"tools": TOOLS},
+                additional_model_options={"tools": tool_schemas()},
             )
 
         def start_model_interaction():
@@ -338,7 +295,7 @@ class GepettoCLI(ida_kernwin.cli_t):
                     MESSAGES,
                     handle_non_streaming_response,
                     stream=False,
-                    additional_model_options={"tools": TOOLS},
+                    additional_model_options={"tools": tool_schemas()},
                 )
 
         print()  # Add a line break before the model's response to improve readability
