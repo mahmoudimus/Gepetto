@@ -1,3 +1,9 @@
+"""Extra prompt context for the hotkey actions.
+
+Provider settings, including reasoning effort, are covered by
+tests/test_provider_settings.py.
+"""
+
 import textwrap
 
 import pytest
@@ -114,81 +120,3 @@ def test_a_broken_drop_in_provider_does_not_abort_the_scan(tmp_path, capsys):
     assert list(context.CONTEXT_PROVIDERS) == ["working"]
     captured = capsys.readouterr()
     assert "broken.py" in captured.out + captured.err
-
-
-# --- reasoning effort -------------------------------------------------------
-
-class FakeProvider:
-    """Exercises GPT._apply_reasoning_options without constructing a client."""
-
-    CONFIG_SECTION = "MyProvider"
-
-    def __init__(self):
-        from gepetto.models.openai import GPT
-
-        self._apply = GPT._apply_reasoning_options.__get__(self)
-
-
-@pytest.fixture()
-def provider():
-    return FakeProvider()
-
-
-def test_reasoning_effort_is_injected_from_the_provider_section(provider, monkeypatch):
-    import gepetto.config
-
-    monkeypatch.setattr(
-        gepetto.config, "get_config",
-        lambda section, option, *a, **k: "high" if (section, option) == ("MyProvider", "REASONING_EFFORT") else None,
-    )
-    assert provider._apply({"tools": []}) == {"tools": [], "reasoning_effort": "high"}
-
-
-def test_nothing_is_injected_when_unset(provider, monkeypatch):
-    import gepetto.config
-
-    monkeypatch.setattr(gepetto.config, "get_config", lambda *a, **k: None)
-    assert provider._apply({"tools": []}) == {"tools": []}
-
-
-@pytest.mark.parametrize("value", ["none", "off", "0", "false", "NONE", "  "])
-def test_disabling_values_suppress_the_option(provider, monkeypatch, value):
-    import gepetto.config
-
-    monkeypatch.setattr(gepetto.config, "get_config", lambda *a, **k: value)
-    assert "reasoning_effort" not in provider._apply({})
-
-
-def test_an_explicit_caller_value_wins(provider, monkeypatch):
-    import gepetto.config
-
-    monkeypatch.setattr(gepetto.config, "get_config", lambda *a, **k: "high")
-    assert provider._apply({"reasoning_effort": "low"})["reasoning_effort"] == "low"
-
-
-def test_the_callers_dict_is_not_mutated(provider, monkeypatch):
-    import gepetto.config
-
-    monkeypatch.setattr(gepetto.config, "get_config", lambda *a, **k: "medium")
-    original = {"tools": []}
-    provider._apply(original)
-    assert original == {"tools": []}
-
-
-def test_none_options_are_handled(provider, monkeypatch):
-    import gepetto.config
-
-    monkeypatch.setattr(gepetto.config, "get_config", lambda *a, **k: "medium")
-    assert provider._apply(None) == {"reasoning_effort": "medium"}
-
-
-def test_each_provider_reads_its_own_section():
-    from gepetto.models.openai import GPT
-    from gepetto.models.deepseek import DeepSeek
-    from gepetto.models.openrouter import OpenRouter
-    from gepetto.models.openai_compatible import OpenAICompatible
-
-    assert GPT.CONFIG_SECTION == "OpenAI"
-    assert DeepSeek.CONFIG_SECTION == "DeepSeek"
-    assert OpenRouter.CONFIG_SECTION == "OpenRouter"
-    assert OpenAICompatible.CONFIG_SECTION == "OpenAICompatible"
