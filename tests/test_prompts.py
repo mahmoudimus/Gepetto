@@ -107,3 +107,17 @@ def test_a_broken_prompt_file_does_not_abort_the_scan(tmp_path, capsys):
     assert "dropped-in" in prompts.render("rename", code="x")
     captured = capsys.readouterr()
     assert "broken.py" in captured.out + captured.err
+
+
+def test_rename_prompt_asks_for_justified_names():
+    rendered = prompts.render("rename", code="int f(){}", locale="en_US")
+    assert '"why"' in rendered
+    assert "not a restatement of the name" in rendered
+    # The example must survive str.format rather than being eaten as a field.
+    assert '"name": "parse_config_line"' in rendered
+    # Doubled braces must collapse to single ones, leaving a usable example and
+    # a literal {} for the empty case. Nested JSON legitimately ends "}}", so
+    # that sequence is not itself evidence of a formatting failure.
+    assert '{"name": "<proposed name>", "why": "<the evidence for it>"}' in rendered
+    assert "Return {} if nothing warrants renaming." in rendered
+    assert "{{" not in rendered

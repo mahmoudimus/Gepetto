@@ -136,10 +136,22 @@ How to choose a name:
   because it will be trusted.
 
 Output: exactly one JSON object. No Markdown, no code fences, no commentary.
-- Keys are the current identifiers, values are the proposed replacements.
+- Keys are the current identifiers. Each value is an object:
+  {{"name": "<proposed name>", "why": "<the evidence for it>"}}
 - Use the key "__function__" to rename the function itself.
 - Include an entry only where the new name is a clear improvement.
 - Return {{}} if nothing warrants renaming.
+
+The "why" is not a restatement of the name. Cite what in the code justifies
+it: which call it is passed to, what it is compared against, which field it
+indexes, which caller supplies it. One clause is enough. A name you cannot
+justify from the code in front of you is a name you should not propose.
+
+Example:
+{{"__function__": {{"name": "parse_config_line",
+                  "why": "splits on '=' and stores into the table its caller
+                          later reads with lookup_setting"}},
+ "v7": {{"name": "line_len", "why": "bound of the copy loop, from strlen(a1)"}}}}
 
 ```c
 {code}

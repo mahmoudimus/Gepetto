@@ -120,3 +120,29 @@ def test_a_broken_drop_in_provider_does_not_abort_the_scan(tmp_path, capsys):
     assert list(context.CONTEXT_PROVIDERS) == ["working"]
     captured = capsys.readouterr()
     assert "broken.py" in captured.out + captured.err
+
+
+# --- rename response parsing -------------------------------------------------
+
+def _split(value):
+    """Mirror of handlers._split, which is nested inside rename_callback."""
+    if isinstance(value, dict):
+        return str(value.get("name") or "").strip(), str(value.get("why") or "").strip()
+    return str(value or "").strip(), ""
+
+
+def test_new_shape_yields_name_and_reason():
+    assert _split({"name": "line_len", "why": "loop bound"}) == ("line_len", "loop bound")
+
+
+def test_old_shape_still_renames_without_a_reason():
+    # A model that ignores the reasoning instruction must still rename.
+    assert _split("line_len") == ("line_len", "")
+
+
+def test_a_reasonless_entry_is_tolerated():
+    assert _split({"name": "line_len"}) == ("line_len", "")
+
+
+def test_an_entry_with_no_name_is_dropped_by_the_caller():
+    assert _split({"why": "explained but unnamed"})[0] == ""

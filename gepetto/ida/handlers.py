@@ -175,19 +175,33 @@ def rename_callback(address, view, response, start_time):
 
     names = dict(names)  # Work on a copy to avoid accidental mutation leakage.
 
+    def _split(value):
+        """Accept both {"old": "new"} and {"old": {"name": .., "why": ..}}.
+
+        A model that ignores the reasoning instruction still renames; it just
+        renames without a justification, rather than breaking the action.
+        """
+        if isinstance(value, dict):
+            return str(value.get("name") or "").strip(), str(value.get("why") or "").strip()
+        return str(value or "").strip(), ""
+
     def _apply():
         function = idaapi.get_func(address)
         if function is None:
             raise RuntimeError(_("Function at EA 0x{ea:X} not found.").format(ea=address))
         function_addr = function.start_ea
         func_name = idc.get_func_name(function_addr) or ""
-        func_new_name = names.pop("__function__", None)
+        func_new_name, func_why = _split(names.pop("__function__", None))
 
+        # (old, new, why)
         rename_pairs = []
         if func_new_name and func_name.startswith("sub_"):
-            rename_pairs.append((func_name, func_new_name))
-        rename_pairs.extend((key, value) for key, value in names.items())
-        rename_mapping = {old: new for old, new in rename_pairs}
+            rename_pairs.append((func_name, func_new_name, func_why))
+        for key, value in names.items():
+            new, why = _split(value)
+            if new:
+                rename_pairs.append((key, new, why))
+        rename_mapping = {old: new for old, new, _ in rename_pairs}
 
         if not rename_pairs:
             return {"count": 0, "cancelled": False}
@@ -196,10 +210,12 @@ def rename_callback(address, view, response, start_time):
             def __init__(self, pairs):
                 super().__init__(
                     _("Select names to rename"),
-                    [[_("Old Name"), 20], [_("New Name"), 20]],
+                    [[_("Old Name"), 20], [_("New Name"), 20], [_("Why"), 60]],
                     flags=ida_kernwin.Choose.CH_MULTI,
                 )
-                self.items = [[old, new] for old, new in pairs]
+                # A name you cannot justify is one you should not accept: the
+                # reasoning is what lets a wrong-but-plausible rename be spotted.
+                self.items = [[old, new, why or _("(no reason given)")] for old, new, why in pairs]
                 self.selected_indices = []
 
             def OnGetLine(self, index):
@@ -217,7 +233,7 @@ def rename_callback(address, view, response, start_time):
 
         chosen_pairs = [rename_pairs[i] for i in chooser.selected_indices]
         replaced: list[str] = []
-        for old, new in chosen_pairs:
+        for old, new, _why in chosen_pairs:
             if old == func_name:
                 if idc.set_name(function_addr, new, idaapi.SN_FORCE):
                     replaced.append(old)
