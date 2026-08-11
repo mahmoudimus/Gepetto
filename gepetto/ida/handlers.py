@@ -9,6 +9,7 @@ import idc  # type: ignore
 
 import gepetto.config
 from gepetto.ida.context import format_extra_context
+from gepetto.ida.utils.clipboard import copy_to_clipboard
 from gepetto.ida.prompts import render
 from gepetto.ida.utils.thread_helpers import *
 from gepetto.models.model_manager import instantiate_model
@@ -426,6 +427,55 @@ class GeneratePythonCodeHandler(idaapi.action_handler_t):
 
         STATUS_PANEL.log(response_finished, category=LogCategory.TOOL, level=LogLevel.SUCCESS)
         print(response_finished)
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+
+# -----------------------------------------------------------------------------
+
+class CopyContextHandler(idaapi.action_handler_t):
+    """Put the context the model would receive on the clipboard, and send nothing.
+
+    Ported from AiDA's handle_copy_context. The value is in seeing exactly what
+    the prompt carries: a context provider that silently produces nothing, or a
+    truncation that lands mid-function, is invisible until you look at it.
+    """
+
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+
+    def activate(self, ctx):
+        ea = idaapi.get_screen_ea()
+        try:
+            decompiler_output = ida_hexrays.decompile(ea)
+        except Exception as e:
+            message = _("Could not decompile the current function: {error}").format(error=str(e))
+            print(message)
+            STATUS_PANEL.mark_error(message)
+            return 1
+
+        extra_context = format_extra_context(ea)
+        function_name = idaapi.get_func_name(ea) or hex(ea)
+        bundle = (
+            f"// Gepetto context for {function_name} at {ea:#x}\n"
+            f"// Model: {gepetto.config.model}\n\n"
+            f"```c\n{decompiler_output}\n```\n"
+            f"{extra_context}"
+        )
+
+        if copy_to_clipboard(bundle):
+            report = _("Copied {count} characters of context for {name} to the clipboard.").format(
+                count=len(bundle), name=function_name)
+            if not extra_context:
+                report += " " + _("No context providers contributed anything.")
+        else:
+            report = _("Could not copy the context to the clipboard; it was printed instead.")
+            print(bundle)
+
+        print(report)
+        STATUS_PANEL.log(report, category=LogCategory.SYSTEM, level=LogLevel.SUCCESS)
+        return 1
 
     def update(self, ctx):
         return idaapi.AST_ENABLE_ALWAYS

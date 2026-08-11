@@ -9,6 +9,7 @@ import ida_hexrays  # type: ignore
 
 import gepetto.config
 from gepetto.ida.handlers import (
+    CopyContextHandler,
     ExplainHandler,
     GenerateCCodeHandler,
     GeneratePythonCodeHandler,
@@ -66,6 +67,8 @@ class GepettoPlugin(idaapi.plugin_t):
     c_code_menu_path = "Edit/Gepetto/" + _("Generate C Code")
     python_code_action_name = "gepetto:generate_python_code"
     python_code_menu_path = "Edit/Gepetto/" + _("Generate Python Code")
+    copy_context_action_name = "gepetto:copy_context"
+    copy_context_menu_path = "Edit/Gepetto/" + _("Copy context to clipboard")
     auto_show_action_name = "gepetto:toggle_status_panel_auto_show"
     wanted_name = 'Gepetto'
     wanted_hotkey = ''
@@ -144,11 +147,21 @@ class GepettoPlugin(idaapi.plugin_t):
         )
         idaapi.register_action(generate_c_code_action)
 
+        # Copy-context action: sends nothing, just shows what would be sent.
+        copy_context_action = idaapi.action_desc_t(self.copy_context_action_name,
+                                                   _('Copy context to clipboard'),
+                                                   CopyContextHandler(),
+                                                   "Ctrl+Alt+C",
+                                                   _('Copy the context Gepetto would send for this function'),
+                                                   9)
+        idaapi.register_action(copy_context_action)
+
         idaapi.attach_action_to_menu(self.explain_menu_path, self.explain_action_name, idaapi.SETMENU_APP)
         idaapi.attach_action_to_menu(self.comment_menu_path, self.comment_action_name, idaapi.SETMENU_APP)
         idaapi.attach_action_to_menu(self.rename_menu_path, self.rename_action_name, idaapi.SETMENU_APP)
         idaapi.attach_action_to_menu(self.c_code_menu_path, self.c_code_action_name, idaapi.SETMENU_APP)
         idaapi.attach_action_to_menu(self.python_code_menu_path, self.python_code_action_name, idaapi.SETMENU_APP)
+        idaapi.attach_action_to_menu(self.copy_context_menu_path, self.copy_context_action_name, idaapi.SETMENU_APP)
 
         PLUGIN_INSTANCE = self
 
@@ -398,5 +411,6 @@ class ContextMenuHooks(idaapi.UI_Hooks):
             idaapi.attach_action_to_popup(widget, popup_handle, GepettoPlugin.rename_action_name, "Gepetto/")
             idaapi.attach_action_to_popup(widget, popup_handle, GepettoPlugin.c_code_action_name, "Gepetto/")
             idaapi.attach_action_to_popup(widget, popup_handle, GepettoPlugin.python_code_action_name, "Gepetto/")
+            idaapi.attach_action_to_popup(widget, popup_handle, GepettoPlugin.copy_context_action_name, "Gepetto/")
 
         return 0
