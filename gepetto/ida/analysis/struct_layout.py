@@ -15,8 +15,10 @@ Two ideas are borrowed from prior art:
   and a pointer, the alternatives are ranked rather than resolved first-wins.
 """
 
+import ida_bytes
 import ida_funcs
 import ida_hexrays
+import ida_name
 import idaapi
 
 from gepetto.ida.utils.thread_helpers import hexrays_available, run_on_main_thread
@@ -27,6 +29,90 @@ DEFAULT_MAX_FUNCTIONS = 12
 # Access kinds, in the order we prefer them when two disagree about a field.
 # An explicit member reference tells us more than a hand-rolled dereference.
 _KIND_RANK = {"memptr": 3, "memref": 3, "deref": 2, "index": 1}
+
+
+class _Aliases:
+    """Which locals must be the same type as each other.
+
+    Borrowed from AutoStruct. Without it `v5 = a1; v5->field_20 = x` loses the
+    field, because v5 is a different lvar; with it the two are one group. It
+    also keeps things apart: `v5 = a1->field_10` unions nothing, so a nested
+    pointer's fields never merge into its parent's layout.
+    """
+
+    def __init__(self):
+        self._parent = {}
+
+    def find(self, item):
+        self._parent.setdefault(item, item)
+        while self._parent[item] != item:
+            self._parent[item] = self._parent[self._parent[item]]
+            item = self._parent[item]
+        return item
+
+    def union(self, a, b):
+        root_a, root_b = self.find(a), self.find(b)
+        if root_a != root_b:
+            self._parent[root_b] = root_a
+
+
+class _AliasVisitor(ida_hexrays.ctree_visitor_t):
+    """Union locals joined by a plain assignment, and nothing else."""
+
+    def __init__(self):
+        super().__init__(ida_hexrays.CV_FAST)
+        self.aliases = _Aliases()
+
+    def visit_expr(self, expr):
+        if expr.op == ida_hexrays.cot_asg:
+            lhs, rhs = _strip_casts(expr.x), _strip_casts(expr.y)
+            if (lhs is not None and rhs is not None
+                    and lhs.op == ida_hexrays.cot_var and rhs.op == ida_hexrays.cot_var):
+                self.aliases.union(lhs.v.idx, rhs.v.idx)
+        return 0
+
+
+def _pointer_size():
+    return 8 if idaapi.inf_is_64bit() else 4
+
+
+def _read_pointer(ea):
+    return ida_bytes.get_qword(ea) if _pointer_size() == 8 else ida_bytes.get_dword(ea)
+
+
+def read_vtable(ea, max_methods=256):
+    """Walk a vtable: consecutive pointers into code.
+
+    Stops at the first slot that is not code, and also when another data
+    reference points at the next slot -- that is where a different vtable
+    begins, and running past it invents methods that belong to someone else.
+    """
+    methods = []
+    cursor = ea
+    size = _pointer_size()
+    while len(methods) < max_methods:
+        try:
+            pointer = _read_pointer(cursor)
+        except Exception:
+            break
+        if not pointer or pointer == idaapi.BADADDR:
+            break
+        function = ida_funcs.get_func(pointer)
+        is_code = function is not None or idaapi.is_code(idaapi.get_flags(pointer))
+        if not is_code:
+            break
+        methods.append(
+            {
+                "slot": len(methods),
+                "offset_hex": hex(len(methods) * size),
+                "ea": hex(pointer),
+                "name": ida_funcs.get_func_name(pointer) or ida_name.get_ea_name(pointer) or "",
+            }
+        )
+        cursor += size
+        if idaapi.get_first_dref_to(cursor) != idaapi.BADADDR:
+            break  # another vtable starts here
+    return methods
 
 
 class _Access:
@@ -71,18 +157,41 @@ class _LayoutVisitor(ida_hexrays.ctree_visitor_t):
     it on are recorded so the caller can follow them.
     """
 
-    def __init__(self, cfunc, target_index):
+    def __init__(self, cfunc, target_index, aliases=None):
         super().__init__(ida_hexrays.CV_PARENTS)
         self.cfunc = cfunc
-        self.target = target_index
+        self.aliases = aliases or _Aliases()
+        self.target = self.aliases.find(target_index)
         self.accesses = []
         self.forwarded = []  # (callee_ea, argument_index)
+        self.vtable_stores = []  # addresses assigned to *target
+        self.virtual_calls = []  # slot offsets called through *target
 
     # -- helpers
 
     def _is_target(self, expr):
         expr = _strip_casts(expr)
-        return expr is not None and expr.op == ida_hexrays.cot_var and expr.v.idx == self.target
+        if expr is None or expr.op != ida_hexrays.cot_var:
+            return False
+        return self.aliases.find(expr.v.idx) == self.target
+
+    def _is_vtable_slot(self, expr):
+        """Match *(*target + N), the shape of a virtual call. Returns N."""
+        expr = _strip_casts(expr)
+        if expr is None or expr.op != ida_hexrays.cot_ptr:
+            return None
+        inner = _strip_casts(expr.x)
+        if inner is None:
+            return None
+        if inner.op == ida_hexrays.cot_add:
+            base, index = _strip_casts(inner.x), inner.y
+            if (base is not None and base.op == ida_hexrays.cot_ptr
+                    and self._is_target(base.x) and index.op == ida_hexrays.cot_num):
+                return index.numval()
+            return None
+        if inner.op == ida_hexrays.cot_ptr and self._is_target(inner.x):
+            return 0
+        return None
 
     def _written(self, expr):
         """True when this expression is the destination of an assignment."""
@@ -137,8 +246,22 @@ class _LayoutVisitor(ida_hexrays.ctree_visitor_t):
                 element = _type_size(expr.type) or 1
                 self._record(expr.y.numval() * element, expr, "index")
 
+        # *target = &off_140xxx: the object's vtable being installed.
+        elif op == ida_hexrays.cot_asg:
+            destination = _strip_casts(expr.x)
+            if (destination is not None and destination.op == ida_hexrays.cot_ptr
+                    and self._is_target(destination.x)):
+                source = _strip_casts(expr.y)
+                if source is not None and source.op == ida_hexrays.cot_ref:
+                    source = _strip_casts(source.x)
+                if source is not None and source.op == ida_hexrays.cot_obj:
+                    self.vtable_stores.append(source.obj_ea)
+
         # Passing the pointer on: remember where, so the scan can follow.
         elif op == ida_hexrays.cot_call:
+            slot = self._is_vtable_slot(expr.x)
+            if slot is not None:
+                self.virtual_calls.append(int(slot))
             callee = _strip_casts(expr.x)
             if callee is not None and callee.op == ida_hexrays.cot_obj:
                 for position, argument in enumerate(expr.a or []):
@@ -150,25 +273,29 @@ class _LayoutVisitor(ida_hexrays.ctree_visitor_t):
 
 def _scan_one(func_ea, argument_index):
     """Accesses made through one argument of one function, plus where it goes."""
+    empty = ([], [], [], [])
     function = ida_funcs.get_func(func_ea)
     if function is None:
-        return [], []
+        return empty
     try:
         cfunc = ida_hexrays.decompile(function)
     except Exception:
-        return [], []
+        return empty
     if cfunc is None:
-        return [], []
+        return empty
 
     lvars = cfunc.get_lvars()
     # Arguments come first in the lvar list, in order.
     arguments = [i for i, lvar in enumerate(lvars) if lvar.is_arg_var]
     if argument_index >= len(arguments):
-        return [], []
+        return empty
 
-    visitor = _LayoutVisitor(cfunc, arguments[argument_index])
+    alias_pass = _AliasVisitor()
+    alias_pass.apply_to(cfunc.body, None)
+
+    visitor = _LayoutVisitor(cfunc, arguments[argument_index], alias_pass.aliases)
     visitor.apply_to(cfunc.body, None)
-    return visitor.accesses, visitor.forwarded
+    return visitor.accesses, visitor.forwarded, visitor.vtable_stores, visitor.virtual_calls
 
 
 def _resolve(accesses):
@@ -257,6 +384,8 @@ def collect_layout(ea=None, argument_index=0, max_depth=DEFAULT_MAX_DEPTH,
     def _work():
         accesses = []
         scanned = []
+        vtable_stores = []
+        virtual_calls = set()
         seen = set()
         frontier = [(root.start_ea, argument_index, 0)]
 
@@ -266,8 +395,10 @@ def collect_layout(ea=None, argument_index=0, max_depth=DEFAULT_MAX_DEPTH,
                 continue
             seen.add((func_ea, position))
 
-            found, forwarded = _scan_one(func_ea, position)
+            found, forwarded, stores, calls = _scan_one(func_ea, position)
             accesses.extend(found)
+            vtable_stores.extend(stores)
+            virtual_calls.update(calls)
             scanned.append(
                 {
                     "function": ida_funcs.get_func_name(func_ea) or hex(func_ea),
@@ -281,9 +412,16 @@ def collect_layout(ea=None, argument_index=0, max_depth=DEFAULT_MAX_DEPTH,
                 frontier.extend(
                     (callee, index, depth + 1) for callee, index in forwarded
                 )
-        return accesses, scanned
 
-    accesses, scanned = run_on_main_thread(_work)
+        vtable = None
+        for store in vtable_stores:
+            methods = read_vtable(store)
+            if methods:
+                vtable = {"ea": hex(store), "methods": methods}
+                break
+        return accesses, scanned, vtable, sorted(virtual_calls)
+
+    accesses, scanned, vtable, virtual_calls = run_on_main_thread(_work)
     fields = _resolve(accesses)
     laid_out = _add_padding(fields)
     size = max((f["offset"] + (f["size"] or 1) for f in fields), default=0)
@@ -297,6 +435,11 @@ def collect_layout(ea=None, argument_index=0, max_depth=DEFAULT_MAX_DEPTH,
         "inferred_size": size,
         "fields": laid_out,
         "scanned_functions": scanned,
+        "vtable": vtable,
+        "virtual_call_slots": [
+            {"slot_offset_hex": hex(offset), "slot": offset // _pointer_size()}
+            for offset in virtual_calls
+        ],
         "limits": {"max_depth": max_depth, "max_functions": max_functions},
         "note": (
             "Offsets, widths and read/write counts are observed, not guessed. "
@@ -308,7 +451,15 @@ def collect_layout(ea=None, argument_index=0, max_depth=DEFAULT_MAX_DEPTH,
 
 def to_c_declaration(layout, name="struct_from_gepetto"):
     """Render a layout as a C struct, for review or for declare_c_type."""
-    lines = [f"struct {name}", "{"]
+    lines = []
+    vtable = layout.get("vtable")
+    if vtable:
+        lines.append(f"// vtable at {vtable['ea']}, {len(vtable['methods'])} methods:")
+        for method in vtable["methods"][:12]:
+            lines.append(f"//   [{method['slot']}] {method['name'] or method['ea']}")
+        if len(vtable["methods"]) > 12:
+            lines.append(f"//   ... {len(vtable['methods']) - 12} more")
+    lines += [f"struct {name}", "{"]
     for field in layout["fields"]:
         offset = field["offset_hex"]
         if field.get("padding"):
