@@ -17,6 +17,8 @@ import importlib.util
 import pathlib
 import traceback
 
+from gepetto.loader import import_module_file, iter_module_files
+
 PROMPTS = {}
 
 _current_source = "built-in"
@@ -54,21 +56,13 @@ def load_prompt_directory(folder, source: str):
     folder = pathlib.Path(folder)
     if not folder.is_dir():
         return
-    for py_file in sorted(folder.glob("*.py")):
-        if py_file.name.startswith("_"):
-            continue
+    for py_file in iter_module_files(folder):
         resolved = str(py_file.resolve())
         if resolved in _LOADED_FILES:
             continue
         _current_source = f"user ({py_file})"
-        try:
-            spec = importlib.util.spec_from_file_location(py_file.stem, py_file)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+        if import_module_file(py_file, "prompt file"):
             _LOADED_FILES[resolved] = True
-        except Exception:
-            print(f"Gepetto: failed to load prompt file {py_file}:")
-            traceback.print_exc()
     _current_source = "built-in"
 
 

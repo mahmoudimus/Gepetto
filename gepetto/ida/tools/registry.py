@@ -16,6 +16,8 @@ import json
 import pathlib
 import traceback
 
+from gepetto.loader import import_module_file, iter_module_files
+
 # name -> (schema, handler)
 TOOL_REGISTRY = {}
 
@@ -104,24 +106,13 @@ def load_tool_directory(folder, source: str, package: str = None):
     if not folder.is_dir():
         return
 
-    for py_file in sorted(folder.glob("*.py")):
-        if py_file.name.startswith("_"):
-            continue
+    for py_file in iter_module_files(folder):
         resolved = str(py_file.resolve())
         if resolved in _LOADED_FILES:
             continue
         _current_source = f"{source} ({py_file})"
-        try:
-            if package:
-                importlib.import_module(f"{package}.{py_file.stem}")
-            else:
-                spec = importlib.util.spec_from_file_location(py_file.stem, py_file)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
+        if import_module_file(py_file, "tool", package=package):
             _LOADED_FILES[resolved] = True
-        except Exception:
-            print(f"Gepetto: failed to load tool {py_file}:")
-            traceback.print_exc()
 
     _current_source = "built-in"
 

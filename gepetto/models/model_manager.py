@@ -3,6 +3,8 @@ import importlib.util
 import pathlib
 import traceback
 
+from gepetto.loader import import_module_file, iter_module_files
+
 import gepetto.paths
 from gepetto.models.base import LanguageModel
 
@@ -111,33 +113,13 @@ def _load_directory(folder, source: str, package: str = None):
     if not folder.is_dir():
         return
 
-    for py_file in sorted(folder.glob("*.py")):
-        if py_file.name.startswith("_"):
-            continue
+    for py_file in iter_module_files(folder):
         resolved = str(py_file.resolve())
         if resolved in _LOADED_FILES:
             continue
         _current_source = f"{source} ({py_file})"
-        try:
-            if package:
-                importlib.import_module(f"{package}.{py_file.stem}")
-            else:
-                spec = importlib.util.spec_from_file_location(py_file.stem, py_file)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
+        if import_module_file(py_file, "provider", package=package):
             _LOADED_FILES[resolved] = True
-        except (ImportError, ModuleNotFoundError) as e:
-            # Expected, not a defect: someone who does not use Claude will never
-            # have the anthropic SDK installed. One line, no stack trace.
-            print(
-                f"Gepetto: provider '{py_file.stem}' unavailable, optional "
-                f"dependency missing: {_missing_dependency(e)}"
-            )
-        except Exception:
-            # A syntax error or an exception raised by the module itself. This
-            # is a real defect and the traceback is the point.
-            print(f"Gepetto: failed to load provider {py_file}:")
-            traceback.print_exc()
 
     _current_source = "built-in"
 
@@ -167,6 +149,8 @@ def _load_entry_points(group: str = "gepetto.providers"):
             else:
                 print(f"Gepetto: entry point {entry_point.name} is neither a class nor callable; ignoring.")
         except (ImportError, ModuleNotFoundError) as e:
+            # Same rule as the directory scan: an absent optional dependency
+            # is expected and gets one line, not a stack trace.
             print(
                 f"Gepetto: entry point '{entry_point.name}' unavailable, optional "
                 f"dependency missing: {_missing_dependency(e)}"
