@@ -9,6 +9,7 @@ import idc  # type: ignore
 
 import gepetto.config
 from gepetto.ida.context import format_extra_context
+from gepetto.ida.prompts import render
 from gepetto.ida.utils.thread_helpers import *
 from gepetto.models.model_manager import instantiate_model
 from gepetto.ida.status_panel.panel_interface import LogCategory, LogLevel
@@ -106,20 +107,7 @@ class ExplainHandler(idaapi.action_handler_t):
         locale = gepetto.config.get_localization_locale()
         extra_context = format_extra_context(idaapi.get_screen_ea())
         gepetto.config.model.query_model_async(
-            f"""
-                You are a reverse-engineering assistant. Output plain text only (no Markdown, no code fences).
-                - Locale: {locale}
-                - Task: Summarize what the C function does and propose a clearer function name if one stands out.
-                - Observations: Use any existing Gepetto-generated comments as hints but do not repeat them verbatim.
-                - Response structure:
-                    1. Brief explanation (2-4 sentences) covering purpose, key behaviours, and notable side effects.
-                    2. Final line: "Proposed name: <name>" (use "(no change)" if you cannot recommend an improvement).
-
-                ```C
-                {decompiler_output}
-                ```
-                {extra_context}
-              """,
+            render("explain", code=str(decompiler_output), locale=locale, extra_context=extra_context),
             functools.partial(comment_callback, address=idaapi.get_screen_ea(), view=v, start_time=start_time))
         request_sent = STATUS_PANEL.log_request_started()
         print(request_sent)
@@ -288,24 +276,11 @@ class RenameHandler(idaapi.action_handler_t):
         v = ida_hexrays.get_widget_vdui(ctx.widget)
         start_time = time.time()
         locale = gepetto.config.get_localization_locale()
+        # Callers and callees are what actually reveal a function's purpose;
+        # renaming from the body alone was the single biggest gap here.
+        extra_context = format_extra_context(idaapi.get_screen_ea())
         gepetto.config.model.query_model_async(
-            f"""
-                You are a reverse-engineering assistant refining identifiers.
-                - Locale: {locale}
-                - Task: Suggest better names for the function and its locals when the improvement is meaningful.
-                - Output: Return exactly one JSON object (no Markdown, no backticks, no commentary).
-                    Keys = original identifiers, values = suggested replacements.
-                    Use the special key "__function__" to propose a new function name.
-                - Guidance:
-                    * Only include entries where the proposed name clearly improves clarity.
-                    * Prefer descriptive, conventional names; avoid Hungarian notation and over-abbreviations.
-                    * Leverage existing accurate comments (especially Gepetto banners) when inferring intent.
-                - If nothing needs renaming, respond with {{}}.
-
-                ```C
-                {decompiler_output}
-                ```
-              """,
+            render("rename", code=str(decompiler_output), locale=locale, extra_context=extra_context),
             functools.partial(rename_callback, address=idaapi.get_screen_ea(), view=v, start_time=start_time),
             additional_model_options={"response_format": {"type": "json_object"}})
         request_sent = STATUS_PANEL.log_request_started()
@@ -362,8 +337,7 @@ class GenerateCCodeHandler(idaapi.action_handler_t):
 
         start_time = time.time()
         gepetto.config.model.query_model_async(
-            f"Please generate executable C code based on the following decompiled C code and ensure it includes all necessary header files and other information:\n"
-            f"{decompiler_output}",
+            render("generate_c", code=str(decompiler_output)),
             functools.partial(self._save_c_code, view=v, start_time=start_time)
         )
         request_sent = STATUS_PANEL.log_request_started()
@@ -417,8 +391,7 @@ class GeneratePythonCodeHandler(idaapi.action_handler_t):
 
         start_time = time.time()
         gepetto.config.model.query_model_async(
-            f"Please generate equivalent Python code based on the following decompiled C code, and provide an example of the function call:"
-            f"{decompiler_output}",
+            render("generate_python", code=str(decompiler_output)),
             functools.partial(self._save_python_code, view=v, start_time=start_time)
         )
         request_sent = STATUS_PANEL.log_request_started()

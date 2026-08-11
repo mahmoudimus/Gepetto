@@ -19,6 +19,7 @@ from gepetto.ida.comment_handler import CommentHandler
 from gepetto.ida.cli import register_cli
 from gepetto.ida.tools.registry import load_available_tools
 from gepetto.ida.context import load_available_context_providers
+from gepetto.ida.prompts import load_available_prompts
 from gepetto.ida.status_panel.status_panel_factory import get_status_panel
 import gepetto.models.model_manager
 
@@ -166,6 +167,9 @@ class GepettoPlugin(idaapi.plugin_t):
 
         # Prompt-context providers from $IDAUSR/cfg/gepetto/context
         load_available_context_providers()
+
+        # Prompt overrides from $IDAUSR/cfg/gepetto/prompts
+        load_available_prompts()
 
         # Register CLI
         register_cli()

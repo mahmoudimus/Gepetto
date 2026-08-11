@@ -7,6 +7,8 @@ import ida_hexrays  # type: ignore
 import ida_kernwin  # type: ignore
 
 import gepetto.config
+from gepetto.ida.prompts import render
+from gepetto.ida.context import format_extra_context
 from gepetto.ida.status_panel.panel_interface import LogCategory, LogLevel
 from gepetto.ida.status_panel.status_panel_factory import get_status_panel
 from gepetto.ida.tools.decompile_function import decompile_function
@@ -55,20 +57,8 @@ class CommentHandler(idaapi.action_handler_t):
         v = ida_hexrays.get_widget_vdui(ctx.widget)
               
         gepetto.config.model.query_model_async(
-            f"""
-                You are a reverse-engineering assistant adding helpful pseudocode comments.
-                - Locale: {localization_locale}
-                - Output format (strict): exactly one JSON object mapping integer lineNumber → string comment.
-                  * No Markdown, no code fences, no explanations outside the JSON object.
-                  * If no comments are warranted, return {{}}.
-                - Scope: Only annotate lines that start with '+' in the listing below.
-                - Guidance: Explain intent, side-effects, or non-obvious control flow. Skip trivial operations.
-                - Style: Keep comments concise (one sentence when possible) and use imperative or descriptive voice.
-                \n
-                ```C
-                {formatted_lines}
-                ```
-              """,
+            render("comment", code=formatted_lines, locale=localization_locale,
+                   extra_context=format_extra_context(idaapi.get_screen_ea())),
             functools.partial(comment_callback, decompiler_output=decompiler_output, pseudocode_lines=pseudocode_lines, view=v, start_time=start_time),
             additional_model_options={"response_format": {"type": "json_object"}})
         request_sent = STATUS_PANEL.log_request_started()
