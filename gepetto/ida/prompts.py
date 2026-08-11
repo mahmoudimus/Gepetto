@@ -126,7 +126,11 @@ register_prompt(
 - Locale: $locale
 $grounding
 
-Task: propose better names for this function and its local variables.
+Task: propose better names for this function, its local variables, and any
+global symbols it touches that still carry compiler-generated names -- things
+like `qword_140C1A0`, `off_1401234`, `unk_140998`, `byte_14055`. A global is
+worth naming when this function's use of it reveals what it holds; leave it
+alone when the only evidence is that it was read.
 
 How to choose a name:
 - Name things after what they represent or do, as evidenced by how they are
@@ -146,8 +150,13 @@ Output: exactly one JSON object. No Markdown, no code fences, no commentary.
 - Keys are the current identifiers. Each value is an object:
   {"name": "<proposed name>", "why": "<the evidence for it>"}
 - Use the key "__function__" to rename the function itself.
+- Globals use their current name as the key, exactly as it appears.
 - Include an entry only where the new name is a clear improvement.
 - Return {} if nothing warrants renaming.
+
+Renaming a global changes it everywhere in the database, not just here, so
+hold those to a higher bar than a local: name one only when this function
+shows what it is for.
 
 The "why" is not a restatement of the name. Cite what in the code justifies
 it: which call it is passed to, what it is compared against, which field it

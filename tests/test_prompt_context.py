@@ -146,3 +146,34 @@ def test_a_reasonless_entry_is_tolerated():
 
 def test_an_entry_with_no_name_is_dropped_by_the_caller():
     assert _split({"why": "explained but unnamed"})[0] == ""
+
+
+# --- which identifiers may be renamed as globals -----------------------------
+
+import re
+
+AUTO_NAMED = re.compile(
+    r"^(unk|byte|word|dword|qword|off|seg|asc|flt|dbl|tbyte|packreal"
+    r"|stru|custdata|algn|jpt)_[0-9A-Fa-f]+$"
+)
+
+
+@pytest.mark.parametrize(
+    "name", ["qword_140C1A0", "off_1401234", "unk_140998", "byte_14055", "jpt_14005A1DE"]
+)
+def test_compiler_generated_data_names_are_renameable(name):
+    assert AUTO_NAMED.match(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "WriteConsoleW",   # an import: renaming it destroys information
+        "HeapSize",
+        "GetProcessHeap",
+        "g_PlayerManager",  # already named by the user
+        "aHelloWorld",      # IDA's string naming, meaningful as-is
+    ],
+)
+def test_already_named_symbols_are_refused(name):
+    assert not AUTO_NAMED.match(name)

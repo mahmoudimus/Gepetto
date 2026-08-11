@@ -4,12 +4,14 @@ import time
 import textwrap
 
 import idaapi  # type: ignore
-import ida_hexrays  # type: ignore
+import ida_hexrays
+import ida_name  # type: ignore
 import idc  # type: ignore
 
 import gepetto.config
 from gepetto.ida.context import format_extra_context
 from gepetto.ida.utils.clipboard import copy_to_clipboard
+from gepetto.ida.tools.rename_global import _apply_global_rename
 from gepetto.ida.prompts import render
 from gepetto.ida.utils.thread_helpers import *
 from gepetto.models.model_manager import instantiate_model
@@ -193,15 +195,55 @@ def rename_callback(address, view, response, start_time):
         func_name = idc.get_func_name(function_addr) or ""
         func_new_name, func_why = _split(names.pop("__function__", None))
 
-        # (old, new, why)
+        # IDA's own naming for unnamed data. Anything outside this already has
+        # a name somebody chose -- an import, a library symbol, an earlier
+        # rename -- and replacing those is destructive rather than helpful.
+        auto_named = re.compile(
+            r"^(unk|byte|word|dword|qword|off|seg|asc|flt|dbl|tbyte|packreal"
+            r"|stru|custdata|algn|jpt)_[0-9A-Fa-f]+$"
+        )
+
+        def _kind(identifier):
+            """function, global or local, decided against the database.
+
+            A global renamed from here is a database-wide change, unlike a
+            local, so the distinction is shown to the user before they accept.
+            """
+            if identifier == func_name:
+                return "function"
+            try:
+                ea = ida_name.get_name_ea(idaapi.BADADDR, identifier)
+            except Exception:
+                return "local"
+            if ea == idaapi.BADADDR:
+                return "local"
+            # Anything living inside a function body is a local or the
+            # function itself, not a data symbol.
+            owner = idaapi.get_func(ea)
+            if owner is not None:
+                return "local"
+            if idaapi.is_code(idaapi.get_flags(ea)):
+                return "local"
+            if not auto_named.match(identifier):
+                # Data, but already meaningfully named: an import such as
+                # WriteConsoleW, or a symbol the user named earlier.
+                return "named"
+            return "global"
+
+        # (old, new, why, kind)
         rename_pairs = []
         if func_new_name and func_name.startswith("sub_"):
-            rename_pairs.append((func_name, func_new_name, func_why))
+            rename_pairs.append((func_name, func_new_name, func_why, "function"))
         for key, value in names.items():
             new, why = _split(value)
-            if new:
-                rename_pairs.append((key, new, why))
-        rename_mapping = {old: new for old, new, _ in rename_pairs}
+            if not new:
+                continue
+            kind = _kind(key)
+            if kind == "named":
+                print(_("Gepetto: refusing to rename {old}, which already has a name.").format(old=key))
+                continue
+            rename_pairs.append((key, new, why, kind))
+        rename_mapping = {old: new for old, new, _why, _k in rename_pairs}
 
         if not rename_pairs:
             return {"count": 0, "cancelled": False}
@@ -210,12 +252,15 @@ def rename_callback(address, view, response, start_time):
             def __init__(self, pairs):
                 super().__init__(
                     _("Select names to rename"),
-                    [[_("Old Name"), 20], [_("New Name"), 20], [_("Why"), 60]],
+                    [[_("Old Name"), 20], [_("New Name"), 20], [_("Kind"), 8], [_("Why"), 60]],
                     flags=ida_kernwin.Choose.CH_MULTI,
                 )
                 # A name you cannot justify is one you should not accept: the
                 # reasoning is what lets a wrong-but-plausible rename be spotted.
-                self.items = [[old, new, why or _("(no reason given)")] for old, new, why in pairs]
+                self.items = [
+                    [old, new, kind, why or _("(no reason given)")]
+                    for old, new, why, kind in pairs
+                ]
                 self.selected_indices = []
 
             def OnGetLine(self, index):
@@ -233,10 +278,16 @@ def rename_callback(address, view, response, start_time):
 
         chosen_pairs = [rename_pairs[i] for i in chooser.selected_indices]
         replaced: list[str] = []
-        for old, new, _why in chosen_pairs:
-            if old == func_name:
+        for old, new, _why, kind in chosen_pairs:
+            if kind == "function":
                 if idc.set_name(function_addr, new, idaapi.SN_FORCE):
                     replaced.append(old)
+            elif kind == "global":
+                try:
+                    _apply_global_rename(ida_name.get_name_ea(idaapi.BADADDR, old), new, force=False)
+                    replaced.append(old)
+                except Exception as e:
+                    print(_("Gepetto: could not rename global {old}: {error}").format(old=old, error=e))
             else:
                 if idaapi.IDA_SDK_VERSION < 760 and view and hasattr(view, "cfunc"):
                     lvars = {lvar.name: lvar for lvar in view.cfunc.lvars}

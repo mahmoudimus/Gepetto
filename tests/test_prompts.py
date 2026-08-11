@@ -128,3 +128,9 @@ def test_rename_prompt_asks_for_justified_names():
     assert '{"name": "<proposed name>", "why": "<the evidence for it>"}' in rendered
     assert "Return {} if nothing warrants renaming." in rendered
     assert "{{" not in rendered
+
+
+def test_rename_prompt_asks_for_globals_and_warns_about_their_reach():
+    rendered = prompts.render("rename", code="x", locale="en_US")
+    assert "qword_140C1A0" in rendered
+    assert "changes it everywhere in the database" in rendered
