@@ -170,3 +170,56 @@ def test_the_builtin_providers_declare_their_sections():
     assert GPT.CONFIG_SECTION == "OpenAI"
     assert DeepSeek.CONFIG_SECTION == "DeepSeek"
     assert OpenAICompatible.CONFIG_SECTION == "OpenAICompatible"
+
+
+# --- temperature is per model, not per provider ------------------------------
+
+def test_temperature_is_withheld_from_a_model_that_rejects_it(settings, capsys):
+    settings[("MyProvider", "TEMPERATURE")] = "0.1"
+
+    model = make_model()
+    model.model = "whatever"
+    type(model).supports_temperature = lambda self: False
+
+    result = model.apply_settings({})
+    assert "temperature" not in result
+    assert "does not accept a temperature" in capsys.readouterr().out
+
+
+def test_extra_options_can_force_a_withheld_temperature_through(settings):
+    # The escape hatch exists precisely for "I know better than the gate".
+    settings[("MyProvider", "TEMPERATURE")] = "0.1"
+    settings[("MyProvider", "EXTRA_OPTIONS")] = '{"temperature": 0.3}'
+
+    model = make_model()
+    model.model = "whatever"
+    type(model).supports_temperature = lambda self: False
+
+    assert model.apply_settings({})["temperature"] == 0.3
+
+
+@pytest.mark.parametrize(
+    ("model_name", "accepted"),
+    [
+        ("gpt-4o", True),
+        ("gpt-4-turbo", True),
+        ("gpt-5", False),
+        ("gpt-5-mini", False),
+        ("gpt-5.2", False),
+        ("gpt-5.6-luna", False),
+        ("o3", False),
+        ("o3-pro", False),
+        ("o4-mini", False),
+    ],
+)
+def test_openai_reasoning_models_are_recognised(model_name, accepted):
+    from gepetto.models.openai import GPT
+
+    probe = GPT.__new__(GPT)
+    probe.model = model_name
+    assert probe.supports_temperature() is accepted
+
+
+def test_a_provider_without_the_restriction_accepts_temperature(settings):
+    settings[("MyProvider", "TEMPERATURE")] = "0.5"
+    assert make_model().apply_settings({})["temperature"] == 0.5

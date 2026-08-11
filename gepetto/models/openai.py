@@ -378,6 +378,15 @@ class GPT(LanguageModel):
             pass
         self._fallback_notice_sent = True
 
+    # Reasoning models reject temperature outright -- o-series answer
+    # "Unsupported parameter", the gpt-5 family "only the default (1) value is
+    # supported" -- so it must be withheld rather than merely ineffective.
+    # Matched by pattern because the family keeps growing.
+    _NO_TEMPERATURE = re.compile(r"^(o\d|gpt-5)", re.IGNORECASE)
+
+    def supports_temperature(self) -> bool:
+        return not self._NO_TEMPERATURE.match(self.model or "")
+
     def supports_streaming(self) -> bool:
         if self._streaming_restriction_active and self._is_restricted_model():
             return False

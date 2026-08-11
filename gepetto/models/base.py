@@ -45,7 +45,23 @@ class LanguageModel(metaclass=abc.ABCMeta):
             return
         options["reasoning_effort"] = effort
 
+    def supports_temperature(self) -> bool:
+        """Whether the selected model accepts a sampling temperature.
+
+        Support is per model, not per provider: OpenAI's reasoning models
+        reject the parameter with a 400 rather than ignoring it, so one
+        setting on a provider section would break every request the moment
+        such a model is selected.
+        """
+        return True
+
     def apply_temperature(self, options, temperature):
+        if not self.supports_temperature():
+            print(
+                f"Gepetto: {self.model} does not accept a temperature; ignoring "
+                f"TEMPERATURE. Set it through EXTRA_OPTIONS to send it anyway."
+            )
+            return
         options["temperature"] = temperature
 
     # -- resolution
