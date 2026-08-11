@@ -23,6 +23,8 @@ DEFAULT_MODELS = [
 ]
 
 class Kluster(GPT):
+    CONFIG_SECTION = "Kluster"
+
     @staticmethod
     def get_menu_name() -> str:
         return "Kluster.ai"

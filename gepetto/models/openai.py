@@ -254,6 +254,11 @@ def _notify_non_stream_error(callback, message: str) -> None:
 
 
 class GPT(LanguageModel):
+    # Configuration section this provider reads its own settings from.
+    # Subclasses override it so that per-provider options such as
+    # REASONING_EFFORT resolve against the section the user already uses.
+    CONFIG_SECTION = "OpenAI"
+
     @staticmethod
     def get_menu_name() -> str:
         return "OpenAI"
@@ -378,6 +383,24 @@ class GPT(LanguageModel):
             return False
         return True
 
+    def _apply_reasoning_options(self, options):
+        """Add REASONING_EFFORT from this provider's config section, if set.
+
+        Gepetto renders reasoning text in the CLI status panel but had no way
+        to ask a model to produce any. An explicit value passed by the caller
+        always wins, and 'none'/'off' disables the injection entirely so the
+        option can be turned off without deleting it.
+        """
+        options = dict(options or {})
+        if "reasoning_effort" in options:
+            return options
+
+        effort = gepetto.config.get_config(self.CONFIG_SECTION, "REASONING_EFFORT")
+        effort = (effort or "").strip()
+        if effort and effort.lower() not in ("none", "off", "0", "false"):
+            options["reasoning_effort"] = effort
+        return options
+
     def query_model(self, query, cb, stream=False, additional_model_options=None):
         """
         Function which sends a query to a GPT-API-compatible model and calls a callback when the response is available.
@@ -388,9 +411,8 @@ class GPT(LanguageModel):
         :param additional_model_options: Additional parameters used when creating the model object. Typically, for
         OpenAI, response_format={"type": "json_object"}.
         """
-        if additional_model_options is None:
-            additional_model_options = {}
-        
+        additional_model_options = self._apply_reasoning_options(additional_model_options)
+
         # Disable streaming for models that don't support it
         if stream and not self.supports_streaming():
             stream = False

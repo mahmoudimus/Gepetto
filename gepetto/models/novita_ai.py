@@ -16,6 +16,8 @@ NOVITA_MODELS = [
 ]
 
 class NovitaAI(GPT):
+    CONFIG_SECTION = "NovitaAI"
+
     @staticmethod
     def get_menu_name() -> str:
         return "Novita AI"

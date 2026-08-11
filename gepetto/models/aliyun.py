@@ -21,6 +21,8 @@ DEFAULT_ALIYUN_MODELS = [
 
 
 class Aliyun(GPT):
+    CONFIG_SECTION = "Aliyun"
+
 
     @staticmethod
     def get_menu_name() -> str:

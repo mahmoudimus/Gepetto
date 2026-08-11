@@ -154,6 +154,8 @@ async def _fetch_lmstudio_models_async(
     return models
 
 class LMStudio(GPT):
+    CONFIG_SECTION = "LMStudio"
+
     @staticmethod
     def get_menu_name() -> str:
         return "LM Studio"

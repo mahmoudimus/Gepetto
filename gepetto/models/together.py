@@ -9,6 +9,8 @@ _ = gepetto.config._
 MISTRAL_MODEL_NAME = "mistralai/Mixtral-8x22B-Instruct-v0.1"
 
 class Together(GPT):
+    CONFIG_SECTION = "Together"
+
     @staticmethod
     def get_menu_name() -> str:
         return "Together"

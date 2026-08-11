@@ -12,6 +12,8 @@ LLAMA_32_MODEL_NAME = "llama-3.2-90b-text-preview"
 MIXTRAL_MODEL_NAME = "mixtral-8x7b-32768"
 
 class Groq(GPT):
+    CONFIG_SECTION = "Groq"
+
     @staticmethod
     def get_menu_name() -> str:
         return "Groq"

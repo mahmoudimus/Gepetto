@@ -11,6 +11,8 @@ DEEPSEEK_V4_FLASH = "deepseek-v4-flash"
 DEEPSEEK_V4_PRO = "deepseek-v4-pro"
 
 class DeepSeek(GPT):
+    CONFIG_SECTION = "DeepSeek"
+
     @staticmethod
     def get_menu_name() -> str:
         return "DeepSeek"

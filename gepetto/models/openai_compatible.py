@@ -14,6 +14,8 @@ DEFAULT_MODELS = [
 
 
 class OpenAICompatible(GPT):
+    CONFIG_SECTION = "OpenAICompatible"
+
 
     @staticmethod
     def get_menu_name() -> str:

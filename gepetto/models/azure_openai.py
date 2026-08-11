@@ -18,6 +18,8 @@ AZURE_OPENAI_MODELS = [
 
 
 class AzureOpenAI(GPT):
+    CONFIG_SECTION = "AzureOpenAI"
+
     API_VERSION = "2024-05-01-preview"
 
     @staticmethod

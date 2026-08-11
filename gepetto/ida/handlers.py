@@ -8,6 +8,7 @@ import ida_hexrays  # type: ignore
 import idc  # type: ignore
 
 import gepetto.config
+from gepetto.ida.context import format_extra_context
 from gepetto.ida.utils.thread_helpers import *
 from gepetto.models.model_manager import instantiate_model
 from gepetto.ida.status_panel.panel_interface import LogCategory, LogLevel
@@ -103,6 +104,7 @@ class ExplainHandler(idaapi.action_handler_t):
         decompiler_output = ida_hexrays.decompile(idaapi.get_screen_ea())
         v = ida_hexrays.get_widget_vdui(ctx.widget)
         locale = gepetto.config.get_localization_locale()
+        extra_context = format_extra_context(idaapi.get_screen_ea())
         gepetto.config.model.query_model_async(
             f"""
                 You are a reverse-engineering assistant. Output plain text only (no Markdown, no code fences).
@@ -116,6 +118,7 @@ class ExplainHandler(idaapi.action_handler_t):
                 ```C
                 {decompiler_output}
                 ```
+                {extra_context}
               """,
             functools.partial(comment_callback, address=idaapi.get_screen_ea(), view=v, start_time=start_time))
         request_sent = STATUS_PANEL.log_request_started()

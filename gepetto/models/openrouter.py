@@ -19,6 +19,8 @@ DEFAULT_OPENROUTER_MODELS = [
 ]
 
 class OpenRouter(GPT):
+    CONFIG_SECTION = "OpenRouter"
+
     @staticmethod
     def get_menu_name() -> str:
         return "OpenRouter"

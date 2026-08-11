@@ -20,6 +20,8 @@ DEFAULT_SILICONFLOW_MODELS = [
 
 
 class SiliconFlow(GPT):
+    CONFIG_SECTION = "SiliconFlow"
+
 
     @staticmethod
     def get_menu_name() -> str:

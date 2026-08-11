@@ -18,6 +18,7 @@ from gepetto.ida.handlers import (
 from gepetto.ida.comment_handler import CommentHandler
 from gepetto.ida.cli import register_cli
 from gepetto.ida.tools.registry import load_available_tools
+from gepetto.ida.context import load_available_context_providers
 from gepetto.ida.status_panel.status_panel_factory import get_status_panel
 import gepetto.models.model_manager
 
@@ -162,6 +163,9 @@ class GepettoPlugin(idaapi.plugin_t):
 
         # Load built-in tools plus anything dropped into $IDAUSR/cfg/gepetto/tools
         load_available_tools()
+
+        # Prompt-context providers from $IDAUSR/cfg/gepetto/context
+        load_available_context_providers()
 
         # Register CLI
         register_cli()
