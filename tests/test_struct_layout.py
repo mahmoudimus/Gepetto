@@ -192,3 +192,26 @@ def test_a_narrow_access_into_a_struct_that_does_not_start_that_way_fails(monkey
 def test_matching_requires_at_least_one_observed_field():
     assert SL.match_existing_structs({"fields": []}) == []
     assert SL.match_existing_structs({"fields": [{"offset": 0, "size": 4, "padding": True}]}) == []
+
+
+# --- applying the declared type back -----------------------------------------
+
+def test_retyping_reports_an_error_when_the_type_is_not_declared(monkeypatch):
+    # Declaring must happen first; silently doing nothing would look like success.
+    monkeypatch.setattr(SL, "pointer_to", lambda name: None)
+    result = SL.apply_type_to_scanned({"scanned_functions": [{"ea": "0x401000"}]}, "nope_t")
+    assert result["applied"] == []
+    assert "not found" in result["error"]
+
+
+def test_retyping_skips_entries_with_no_usable_address(monkeypatch):
+    monkeypatch.setattr(SL, "pointer_to", lambda name: object())
+    result = SL.apply_type_to_scanned(
+        {"scanned_functions": [{"function": "f"}, {"ea": "not-hex"}]}, "thing_t")
+    assert result["applied"] == [] and result["failed"] == []
+
+
+def test_retyping_a_layout_with_nothing_scanned_is_harmless(monkeypatch):
+    monkeypatch.setattr(SL, "pointer_to", lambda name: object())
+    assert SL.apply_type_to_scanned({"scanned_functions": []}, "thing_t") == {
+        "applied": [], "failed": []}

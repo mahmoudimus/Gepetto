@@ -594,6 +594,54 @@ def collect_layout(ea=None, argument_index=0, max_depth=DEFAULT_MAX_DEPTH,
     }
 
 
+def pointer_to(struct_name):
+    """tinfo_t for `struct_name *`, or None if the type is not known yet."""
+    named = ida_typeinf.tinfo_t()
+    if not named.get_named_type(ida_typeinf.get_idati(), struct_name):
+        return None
+    pointer = ida_typeinf.tinfo_t()
+    if not pointer.create_ptr(named):
+        return None
+    return pointer if pointer.is_correct() else None
+
+
+def apply_type_to_scanned(layout, struct_name):
+    """Retype the variable the layout came from, in every function scanned.
+
+    Declaring a type nobody uses is half a feature: the point of recovering a
+    struct is that the pseudocode then reads in terms of it. hrtng assigns the
+    finalised type back to every variable it scanned, and so does this.
+    """
+    pointer = pointer_to(struct_name)
+    if pointer is None:
+        return {"applied": [], "failed": [], "error": f"type {struct_name!r} not found after declaring it"}
+
+    applied, failed = [], []
+    for scanned in layout.get("scanned_functions", []):
+        try:
+            func_ea = int(scanned["ea"], 16)
+        except (KeyError, ValueError):
+            continue
+        position = scanned.get("argument", 0)
+        try:
+            cfunc = ida_hexrays.decompile(ida_funcs.get_func(func_ea))
+            arguments = [lvar for lvar in cfunc.get_lvars() if lvar.is_arg_var]
+            if position >= len(arguments):
+                continue
+            lvar = arguments[position]
+
+            info = ida_hexrays.lvar_saved_info_t()
+            info.ll = ida_hexrays.lvar_locator_t(lvar.location, lvar.defea)
+            info.type = pointer
+            if ida_hexrays.modify_user_lvar_info(func_ea, ida_hexrays.MLI_TYPE, info):
+                applied.append(f"{scanned.get('function')}({lvar.name})")
+            else:
+                failed.append(scanned.get("function"))
+        except Exception as e:
+            failed.append(f"{scanned.get('function')}: {e}")
+    return {"applied": applied, "failed": failed}
+
+
 def to_c_declaration(layout, name="struct_from_gepetto"):
     """Render a layout as a C struct, for review or for declare_c_type."""
     lines = []

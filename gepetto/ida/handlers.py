@@ -14,7 +14,11 @@ from gepetto.ida.context import format_extra_context
 from gepetto.ida.utils.clipboard import copy_to_clipboard
 from gepetto.ida.tools.rename_global import _apply_global_rename
 from gepetto.ida.tools.declare_c_type import declare_c_type
-from gepetto.ida.analysis.struct_layout import collect_layout, to_c_declaration
+from gepetto.ida.analysis.struct_layout import (
+    apply_type_to_scanned,
+    collect_layout,
+    to_c_declaration,
+)
 from gepetto.ida.prompts import render
 from gepetto.ida.utils.thread_helpers import *
 from gepetto.models.model_manager import instantiate_model
@@ -609,7 +613,11 @@ def struct_callback(address, argument_index, layout, response, start_time):
         declaration = "struct %s\n{\n%s\n};" % (struct_name, "\n".join(members))
 
         result = declare_c_type(declaration)
-        return {"applied": True, "cancelled": False, "name": struct_name, "result": result}
+        # Declaring a type nobody uses is half the job: retype the variable in
+        # every function the scan covered, so the pseudocode reads in terms of it.
+        retyped = apply_type_to_scanned(layout, struct_name)
+        return {"applied": True, "cancelled": False, "name": struct_name,
+                "result": result, "retyped": retyped}
 
     try:
         outcome = run_on_main_thread(_apply, write=True) or {}
@@ -622,8 +630,15 @@ def struct_callback(address, argument_index, layout, response, start_time):
     if outcome.get("cancelled"):
         message = _("Struct creation cancelled.")
     elif outcome.get("applied"):
+        retyped = outcome.get("retyped") or {}
+        applied_to = retyped.get("applied") or []
         message = _("Declared struct {name} with {count} members.").format(
             name=outcome.get("name"), count=len(layout["fields"]))
+        if applied_to:
+            message += " " + _("Applied to {vars}.").format(vars=", ".join(applied_to))
+        elif retyped.get("failed") or retyped.get("error"):
+            message += " " + _("Could not retype the scanned variables: {why}").format(
+                why=retyped.get("error") or "; ".join(str(f) for f in retyped["failed"]))
     else:
         message = _("Struct was not declared.")
     print(message)
