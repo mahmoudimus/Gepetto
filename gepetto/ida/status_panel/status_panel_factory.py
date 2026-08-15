@@ -14,6 +14,8 @@ def get_status_panel() -> StatusPanel:
         from .qt_panel import _StatusPanelManager
         _panel = _StatusPanelManager()
     except Exception:
-        _panel = NoStatusPanel()
+        # Keep the fallback ephemeral so a later desktop-ready call can create
+        # the real panel after IDA has initialized its Qt bindings.
+        return NoStatusPanel()
 
     return _panel
