@@ -41,6 +41,12 @@ def test_plugin_init_defers_ui_setup_until_the_desktop_is_ready(monkeypatch):
     assert initialized == [plugin]
 
 
+def test_plugin_starts_with_ui_uninitialized():
+    from gepetto.ida import ui
+
+    assert ui.GepettoPlugin()._ui_initialized is False
+
+
 def test_importing_ui_does_not_import_status_panel_consumers(monkeypatch):
     module_names = (
         "gepetto.ida.ui",
