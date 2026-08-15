@@ -8,6 +8,7 @@ import ida_hexrays  # type: ignore
 import idc  # type: ignore
 
 import gepetto.config
+from gepetto.ida.call_graph import collect_call_graph_context
 from gepetto.ida.utils.thread_helpers import *
 from gepetto.models.model_manager import instantiate_model
 from gepetto.ida.status_panel.panel_interface import LogCategory, LogLevel
@@ -16,6 +17,49 @@ from gepetto.ida.status_panel.status_panel_factory import get_status_panel
 _ = gepetto.config._
 
 STATUS_PANEL = get_status_panel()
+
+
+def _format_explain_call_graph_context(context):
+    neighbours = context.get("neighbours", []) if isinstance(context, dict) else []
+    if not isinstance(neighbours, list) or not neighbours:
+        return ""
+
+    lines = [
+        "\nBounded call-graph evidence from observed neighbouring code:",
+        "Use these bodies as evidence of relationships and behavior; separate direct observations from inference.",
+    ]
+    for neighbour in neighbours:
+        if not isinstance(neighbour, dict):
+            continue
+        relation = neighbour.get("relation", "neighbour")
+        name = neighbour.get("name", "<unnamed>")
+        ea = neighbour.get("ea", "<unknown EA>")
+        depth = neighbour.get("depth", "?")
+        code = neighbour.get("code", "")
+        lines.extend(
+            [
+                f"\n[{relation}, depth {depth}] {name} ({ea})",
+                "```C",
+                str(code),
+                "```",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _collect_explain_call_graph_context(ea):
+    try:
+        context = collect_call_graph_context(
+            ea,
+            direction="both",
+            max_depth=1,
+            max_functions=4,
+            max_chars_per_function=600,
+        )
+    except Exception as exc:
+        print(f"Gepetto: call-graph evidence unavailable: {exc}")
+        return ""
+    return _format_explain_call_graph_context(context)
 
 def comment_callback(address, view, response, start_time):
     """Callback that sets a comment at the given address.
@@ -100,15 +144,18 @@ class ExplainHandler(idaapi.action_handler_t):
 
     def activate(self, ctx):
         start_time = time.time()
-        decompiler_output = ida_hexrays.decompile(idaapi.get_screen_ea())
+        ea = idaapi.get_screen_ea()
+        decompiler_output = ida_hexrays.decompile(ea)
         v = ida_hexrays.get_widget_vdui(ctx.widget)
         locale = gepetto.config.get_localization_locale()
+        relationship_context = _collect_explain_call_graph_context(ea)
         gepetto.config.model.query_model_async(
             f"""
                 You are a reverse-engineering assistant. Output plain text only (no Markdown, no code fences).
                 - Locale: {locale}
                 - Task: Summarize what the C function does and propose a clearer function name if one stands out.
                 - Observations: Use any existing Gepetto-generated comments as hints but do not repeat them verbatim.
+                - Relationship evidence: When bounded call-graph evidence is present, use it to explain the function's observed role. Do not present an inferred role as a fact.
                 - Response structure:
                     1. Brief explanation (2-4 sentences) covering purpose, key behaviours, and notable side effects.
                     2. Final line: "Proposed name: <name>" (use "(no change)" if you cannot recommend an improvement).
@@ -116,8 +163,9 @@ class ExplainHandler(idaapi.action_handler_t):
                 ```C
                 {decompiler_output}
                 ```
+                {relationship_context}
               """,
-            functools.partial(comment_callback, address=idaapi.get_screen_ea(), view=v, start_time=start_time))
+            functools.partial(comment_callback, address=ea, view=v, start_time=start_time))
         request_sent = STATUS_PANEL.log_request_started()
         print(request_sent)
         return 1
