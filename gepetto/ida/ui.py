@@ -8,16 +8,7 @@ import ida_kernwin  # type: ignore
 import ida_hexrays  # type: ignore
 
 import gepetto.config
-from gepetto.ida.handlers import (
-    ExplainHandler,
-    GenerateCCodeHandler,
-    GeneratePythonCodeHandler,
-    RenameHandler,
-    SwapModelHandler,
-)
-from gepetto.ida.comment_handler import CommentHandler
-from gepetto.ida.cli import register_cli
-from gepetto.ida.status_panel.status_panel_factory import get_status_panel
+from gepetto.ida.utils.hooks import run_when_desktop_ready
 import gepetto.models.model_manager
 
 _ = gepetto.config._
@@ -32,7 +23,7 @@ def get_plugin_instance() -> "GepettoPlugin | None":
 
 def trigger_model_select_menu_regeneration() -> None:
     plugin = get_plugin_instance()
-    if not plugin:
+    if not plugin or not getattr(plugin, "_ui_initialized", False):
         return
     try:
         plugin.generate_model_select_menu()
@@ -45,6 +36,13 @@ def _safe_execute_sync(callback):
         ida_kernwin.execute_sync(callback, ida_kernwin.MFF_FAST)
     except Exception:
         pass
+
+
+def _get_status_panel():
+    """Resolve the Qt-backed panel only after the desktop is initialized."""
+    from gepetto.ida.status_panel.status_panel_factory import get_status_panel
+
+    return get_status_panel()
 
 
 # =============================================================================
@@ -63,6 +61,10 @@ class GepettoPlugin(idaapi.plugin_t):
     c_code_menu_path = "Edit/Gepetto/" + _("Generate C Code")
     python_code_action_name = "gepetto:generate_python_code"
     python_code_menu_path = "Edit/Gepetto/" + _("Generate Python Code")
+    show_panel_action_name = "gepetto:show_side_panel"
+    show_panel_menu_path = "Edit/Gepetto/" + _("Show Side Panel")
+    hide_panel_action_name = "gepetto:hide_side_panel"
+    hide_panel_menu_path = "Edit/Gepetto/" + _("Hide Side Panel")
     auto_show_action_name = "gepetto:toggle_status_panel_auto_show"
     wanted_name = 'Gepetto'
     wanted_hotkey = ''
@@ -70,6 +72,12 @@ class GepettoPlugin(idaapi.plugin_t):
     help = _("See usage instructions on GitHub")
     menu = None
     model_action_map = {}
+
+    # -----------------------------------------------------------------------------
+
+    def __init__(self):
+        super().__init__()
+        self._ui_initialized = False
 
     # -----------------------------------------------------------------------------
 
@@ -84,6 +92,28 @@ class GepettoPlugin(idaapi.plugin_t):
         # Check if Gepetto loaded at least one model properly
         if not gepetto.config.model:
             return idaapi.PLUGIN_SKIP
+
+        PLUGIN_INSTANCE = self
+        run_when_desktop_ready(self.initialize_ui)
+        return idaapi.PLUGIN_KEEP
+
+    # -----------------------------------------------------------------------------
+
+    def initialize_ui(self):
+        """Install Gepetto's Qt/UI integrations after IDA's desktop is ready."""
+        if self._ui_initialized:
+            return
+
+        # These modules instantiate their status-panel references at import
+        # time. Import them only after Qt and IDA's desktop are available.
+        from gepetto.ida.handlers import (
+            ExplainHandler,
+            GenerateCCodeHandler,
+            GeneratePythonCodeHandler,
+            RenameHandler,
+        )
+        from gepetto.ida.comment_handler import CommentHandler
+        from gepetto.ida.cli import register_cli
 
         # Function explaining action
         explain_action = idaapi.action_desc_t(self.explain_action_name,
@@ -141,13 +171,35 @@ class GepettoPlugin(idaapi.plugin_t):
         )
         idaapi.register_action(generate_c_code_action)
 
+        self._show_panel_handler = ShowStatusPanelHandler()
+        show_panel_action = idaapi.action_desc_t(
+            self.show_panel_action_name,
+            _("Show Side Panel"),
+            self._show_panel_handler,
+            "",
+            _("Show the Gepetto side panel"),
+            -1,
+        )
+        idaapi.register_action(show_panel_action)
+
+        self._hide_panel_handler = HideStatusPanelHandler()
+        hide_panel_action = idaapi.action_desc_t(
+            self.hide_panel_action_name,
+            _("Hide Side Panel"),
+            self._hide_panel_handler,
+            "",
+            _("Hide the Gepetto side panel"),
+            -1,
+        )
+        idaapi.register_action(hide_panel_action)
+
         idaapi.attach_action_to_menu(self.explain_menu_path, self.explain_action_name, idaapi.SETMENU_APP)
         idaapi.attach_action_to_menu(self.comment_menu_path, self.comment_action_name, idaapi.SETMENU_APP)
         idaapi.attach_action_to_menu(self.rename_menu_path, self.rename_action_name, idaapi.SETMENU_APP)
         idaapi.attach_action_to_menu(self.c_code_menu_path, self.c_code_action_name, idaapi.SETMENU_APP)
         idaapi.attach_action_to_menu(self.python_code_menu_path, self.python_code_action_name, idaapi.SETMENU_APP)
-
-        PLUGIN_INSTANCE = self
+        idaapi.attach_action_to_menu(self.show_panel_menu_path, self.show_panel_action_name, idaapi.SETMENU_APP)
+        idaapi.attach_action_to_menu(self.hide_panel_menu_path, self.hide_panel_action_name, idaapi.SETMENU_APP)
 
         self._menu_refresh_lock = threading.Lock()
         self._menu_refresh_thread: threading.Thread | None = None
@@ -167,9 +219,8 @@ class GepettoPlugin(idaapi.plugin_t):
         self.auto_show_menu_path = f"{options_menu}/{toggle_label}"
         self._register_auto_show_action()
         if gepetto.config.auto_show_status_panel_enabled():
-            ida_kernwin.execute_sync(lambda: get_status_panel().ensure_shown(), ida_kernwin.MFF_FAST)
-
-        return idaapi.PLUGIN_KEEP
+            ida_kernwin.execute_sync(lambda: _get_status_panel().ensure_shown(), ida_kernwin.MFF_FAST)
+        self._ui_initialized = True
 
     # -----------------------------------------------------------------------------
 
@@ -182,6 +233,8 @@ class GepettoPlugin(idaapi.plugin_t):
         :param model_name: The name of the model to use when this action is clicked.
         :return: None
         """
+        from gepetto.ida.handlers import SwapModelHandler
+
         action = idaapi.action_desc_t(action_name,
                                       model_name,
                                       None if str(gepetto.config.model) == model_name
@@ -320,11 +373,12 @@ class GepettoPlugin(idaapi.plugin_t):
 
     def term(self):
         global PLUGIN_INSTANCE
-        self.detach_actions()
-        if self.menu:
-            self.menu.unhook()
-        self._unregister_auto_show_action()
-        get_status_panel().close()
+        if self._ui_initialized:
+            self.detach_actions()
+            if self.menu:
+                self.menu.unhook()
+            self._unregister_auto_show_action()
+            _get_status_panel().close()
         PLUGIN_INSTANCE = None
         return
 
@@ -341,8 +395,32 @@ class ToggleStatusPanelAutoShowHandler(idaapi.action_handler_t):
         new_state = not current_state
         gepetto.config.set_auto_show_status_panel(new_state)
         if new_state:
-            ida_kernwin.execute_sync(lambda: get_status_panel().ensure_shown(), ida_kernwin.MFF_FAST)
+            ida_kernwin.execute_sync(lambda: _get_status_panel().ensure_shown(), ida_kernwin.MFF_FAST)
         self._plugin.refresh_auto_show_action(force_state=new_state)
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+
+# -----------------------------------------------------------------------------
+
+class ShowStatusPanelHandler(idaapi.action_handler_t):
+    """Show the panel without changing its auto-open preference."""
+
+    def activate(self, ctx):
+        _safe_execute_sync(lambda: _get_status_panel().ensure_shown())
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+
+class HideStatusPanelHandler(idaapi.action_handler_t):
+    """Hide the panel without changing its auto-open preference."""
+
+    def activate(self, ctx):
+        _safe_execute_sync(lambda: _get_status_panel().close())
         return 1
 
     def update(self, ctx):
