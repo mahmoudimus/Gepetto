@@ -204,6 +204,7 @@ class GepettoPlugin(idaapi.plugin_t):
         self._menu_refresh_lock = threading.Lock()
         self._menu_refresh_thread: threading.Thread | None = None
         self._menu_refresh_pending = False
+        self._menu_refresh_stop = threading.Event()
 
         self.generate_model_select_menu()
 
@@ -265,13 +266,21 @@ class GepettoPlugin(idaapi.plugin_t):
     def generate_model_select_menu(self):
         def do_generate_model_select_menu():
             while True:
+                if self._menu_refresh_stop.is_set():
+                    return
                 with self._menu_refresh_lock:
+                    if self._menu_refresh_stop.is_set():
+                        return
                     # Delete any possible previous entries
                     self.detach_actions()
                     self.model_action_map.clear()
 
                     for provider in gepetto.models.model_manager.list_models():
+                        if self._menu_refresh_stop.is_set():
+                            return
                         for model in provider.supported_models():
+                            if self._menu_refresh_stop.is_set():
+                                return
                             action_name = f"gepetto:{model}_{''.join(random.choices(string.ascii_lowercase, k=7))}"
                             self.model_action_map[model] = action_name
                             self.bind_model_switch_action(
@@ -371,9 +380,30 @@ class GepettoPlugin(idaapi.plugin_t):
 
     # -----------------------------------------------------------------------------
 
+    def _stop_menu_refresh_thread(self, timeout: float = 5.0):
+        """Signal the background menu-refresh thread to exit and wait for it.
+
+        Must run before any other teardown in term(): the thread calls
+        idaapi.register_action/attach_action_to_menu/unregister_action via
+        execute_sync(), and IDA gives no other callback for when that thread
+        has quiesced before kernwin itself starts tearing down at exit.
+        """
+        stop_event = getattr(self, "_menu_refresh_stop", None)
+        if stop_event is not None:
+            stop_event.set()
+
+        thread = getattr(self, "_menu_refresh_thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout)
+            if thread.is_alive():
+                print("Gepetto: menu refresh thread did not stop in time during term()")
+
+    # -----------------------------------------------------------------------------
+
     def term(self):
         global PLUGIN_INSTANCE
-        if self._ui_initialized:
+        self._stop_menu_refresh_thread()
+        if getattr(self, "_ui_initialized", False):
             self.detach_actions()
             if self.menu:
                 self.menu.unhook()
