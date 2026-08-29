@@ -26,12 +26,7 @@ python_version = "3.10"
 # drown in them.
 ignore_missing_imports = true
 
-# Check the listed files, not everything they import. The rest of the package
-# reports 49 errors today; gating this on that cleanup would mean checking
-# nothing at all. Add modules here as they are made clean.
-follow_imports = "silent"
-files = [
-    "gepetto/ida/call_graph.py",
-    "gepetto/ida/handlers.py",
-    "gepetto/ida/tools/get_call_graph_context.py",
-]
+# The whole package, not an allowlist. The checker went in scoped to three
+# modules because the rest reported 40 errors; those are fixed, so the scope is
+# everything from here on and a new module cannot quietly opt out of it.
+files = ["gepetto"]

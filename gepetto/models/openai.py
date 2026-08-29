@@ -66,7 +66,7 @@ _STREAMING_RESTRICTION_PATTERNS = (
 )
 
 
-def _is_supported_openai_model(model_id: str) -> bool:
+def _is_supported_openai_model(model_id: str | None) -> bool:
     """Return True if model_id should appear in the chat model menu."""
     if not model_id:
         return False
@@ -222,7 +222,7 @@ async def _fetch_openai_models_async(
             (model or {}).get("id")
             for model in data.get("data", [])
         )
-        if _is_supported_openai_model(model_id)
+        if model_id and _is_supported_openai_model(model_id)
     ]
     return _sort_openai_models(models or list(_DEFAULT_OPENAI_MODELS))
 

@@ -142,6 +142,7 @@ def _gather_xrefs(
     seen = set()
     collapsed = []
     for dirn, frm, to, t, kind_label in filtered:
+        key: tuple
         if collapse_by == "pair":
             key = (frm, to)
         elif collapse_by == "from_func":

@@ -72,7 +72,8 @@ class CommentHandler(idaapi.action_handler_t):
             functools.partial(comment_callback, decompiler_output=decompiler_output, pseudocode_lines=pseudocode_lines, view=v, start_time=start_time),
             additional_model_options={"response_format": {"type": "json_object"}})
         request_sent = STATUS_PANEL.log_request_started()
-        print(request_sent)
+        if request_sent:
+            print(request_sent)
         return 1
 
     # This action is always available.
@@ -163,7 +164,8 @@ def comment_callback(decompiler_output, pseudocode_lines, view, response, start_
             )
 
         response_finished = STATUS_PANEL.log_request_finished(elapsed_time)
-        print(response_finished)
+        if response_finished:
+            print(response_finished)
 
     except Exception as e:
         error_message = _("[ERROR] comment_callback: {error}").format(error=e)

@@ -913,7 +913,7 @@ class _StatusPanelManager(StatusPanel):
 
         if getattr(gepetto_cli, "CLI", None) is None:
             try:
-                gepetto_cli.register_cli(self)  # inject this StatusPanel if you want
+                gepetto_cli.register_cli()
             except Exception as exc:  # pragma: no cover
                 raise RuntimeError("Failed to initialize Gepetto CLI") from exc
 

@@ -41,7 +41,7 @@ def _update_ollama_models(models: list[str], *, notify: bool = True) -> None:
     global OLLAMA_MODELS
     normalized = sorted(dict.fromkeys(models))
     with _OLLAMA_MODELS_LOCK:
-        current = list(OLLAMA_MODELS) if OLLAMA_MODELS is not None else []
+        current: list[str] = list(OLLAMA_MODELS) if OLLAMA_MODELS is not None else []
         if normalized == current:
             return
         OLLAMA_MODELS = normalized
@@ -121,11 +121,12 @@ async def _fetch_ollama_models_async(host: str | None, timeout: _httpx.Timeout) 
         return []
 
     payload = response.json() or {}
-    models = [
+    named = (
         model.get("model")
         for model in payload.get("models", [])
-        if isinstance(model, dict) and model.get("model")
-    ]
+        if isinstance(model, dict)
+    )
+    models = [name for name in named if name]
     models.sort()
     return models
 

@@ -37,7 +37,7 @@ def _update_lmstudio_models(models: list[str], *, notify: bool = True) -> None:
     global LMSTUDIO_MODELS
     normalized = sorted(dict.fromkeys(models))
     with _LMSTUDIO_MODELS_LOCK:
-        current = list(LMSTUDIO_MODELS) if LMSTUDIO_MODELS is not None else []
+        current: list[str] = list(LMSTUDIO_MODELS) if LMSTUDIO_MODELS is not None else []
         if normalized == current:
             return
         LMSTUDIO_MODELS = normalized
@@ -145,11 +145,12 @@ async def _fetch_lmstudio_models_async(
         return []
 
     payload = response.json() or {}
-    models = [
+    named = (
         model.get("id")
         for model in payload.get("data", [])
-        if isinstance(model, dict) and model.get("id")
-    ]
+        if isinstance(model, dict)
+    )
+    models = [name for name in named if name]
     models.sort()
     return models
 

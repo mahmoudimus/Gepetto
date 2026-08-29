@@ -2,11 +2,12 @@ import importlib.metadata
 import importlib.util
 import pathlib
 import traceback
+from typing import cast
 
 import gepetto.paths
 from gepetto.models.base import LanguageModel
 
-MODEL_LIST: list[LanguageModel] = list()
+MODEL_LIST: list[type[LanguageModel]] = list()
 
 
 def _missing_dependency(exc):
@@ -21,7 +22,7 @@ def _missing_dependency(exc):
 _current_source = "built-in"
 
 
-def register_model(model: LanguageModel):
+def register_model(model: type[LanguageModel]):
     if not isinstance(model, type) or not issubclass(model, LanguageModel):
         return
     # Checked before the collision scan on purpose: an unconfigured provider
@@ -90,10 +91,10 @@ def get_fallback_model():
 # Drop-in files already executed, keyed by resolved path, so that calling
 # load_available_models() twice does not re-execute them and re-register a
 # second, identical-but-distinct class over the first.
-_LOADED_FILES = {}
+_LOADED_FILES: dict[str, bool] = {}
 
 
-def _load_directory(folder, source: str, package: str = None):
+def _load_directory(folder, source: str, package: str | None = None):
     """Import every provider module in a directory.
 
     ``package`` names the Python package the directory corresponds to, and is
@@ -123,6 +124,12 @@ def _load_directory(folder, source: str, package: str = None):
                 importlib.import_module(f"{package}.{py_file.stem}")
             else:
                 spec = importlib.util.spec_from_file_location(py_file.stem, py_file)
+                if spec is None or spec.loader is None:
+                    # Not a missing optional dependency: the file is there
+                    # and cannot be made into a module, which is a defect
+                    # and earns the traceback below rather than one line.
+                    raise RuntimeError(
+                        f"{py_file} cannot be loaded as a Python module")
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
             _LOADED_FILES[resolved] = True
@@ -161,7 +168,12 @@ def _load_entry_points(group: str = "gepetto.providers"):
         try:
             target = entry_point.load()
             if isinstance(target, type):
-                register_model(target)
+                # register_model re-checks that this is a LanguageModel
+                # subclass and ignores it otherwise, which is the point: an
+                # entry point is third-party. Narrowing with issubclass here
+                # instead would send a rejected class to the `callable`
+                # branch below -- classes are callable -- and construct it.
+                register_model(cast("type[LanguageModel]", target))
             elif callable(target):
                 target(register_model)
             else:

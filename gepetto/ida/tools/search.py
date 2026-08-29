@@ -1,3 +1,4 @@
+from typing import Any
 import json
 import hashlib
 import ida_bytes
@@ -295,7 +296,7 @@ def list_strings(
     next_offset = end if end < total else None
 
     # Build payload
-    results = []
+    results: list[Any] = []
     for x in page:
         if return_addresses_only:
             results.append(int(x["ea"]))

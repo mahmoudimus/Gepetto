@@ -4,6 +4,7 @@ import os
 import pathlib
 import re
 import shutil
+from typing import cast
 
 import gepetto.paths
 from gepetto.models.model_manager import instantiate_model, load_available_models, get_fallback_model
@@ -291,8 +292,11 @@ def auto_show_status_panel_enabled() -> bool:
     global parsed_ini
     if parsed_ini is None:
         load_config()
+    # load_config() assigns parsed_ini before anything in it can fail, so it is
+    # set by here or load_config() raised. A guard would be unreachable.
+    ini = cast(configparser.RawConfigParser, parsed_ini)
     try:
-        return parsed_ini.getboolean("Gepetto", "AUTO_SHOW_STATUS_PANEL")
+        return ini.getboolean("Gepetto", "AUTO_SHOW_STATUS_PANEL")
     except (configparser.NoOptionError, configparser.NoSectionError, ValueError):
         return True
 
