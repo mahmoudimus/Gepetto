@@ -464,3 +464,50 @@ def test_both_names_two_relations_so_asking_for_one_is_an_error():
 
     with pytest.raises(ValueError, match="two relations"):
         call_graph.Relation.for_direction(call_graph.Direction.BOTH)
+
+
+def test_the_three_xref_parameters_agree_with_each_other():
+    """They were three separate conditionals; getting one wrong queried the
+    other direction and nothing said so."""
+    callers = call_graph.Direction.CALLERS.xrefs
+    callees = call_graph.Direction.CALLEES.xrefs
+
+    assert callers == ("to", "from_func", "from_ea")
+    assert callees == ("from", "to_func", "to_ea")
+    assert set(callers) & set(callees) == set(), "no parameter shared by both"
+
+
+def test_both_has_no_single_xref_query():
+    import pytest
+
+    with pytest.raises(ValueError, match="walks two ways"):
+        call_graph.Direction.BOTH.xrefs
+
+
+def test_neighbours_asks_for_the_direction_it_was_given(monkeypatch):
+    """The parameters reaching the xref API are the direction's, not a guess."""
+    asked = {}
+
+    def fake_xrefs(**kwargs):
+        asked.update(kwargs)
+        return {"xrefs": []}
+
+    monkeypatch.setattr(call_graph, "get_xrefs_unified", fake_xrefs)
+
+    call_graph._function_neighbours(0x100, call_graph.Direction.CALLERS)
+    assert (asked["direction"], asked["collapse_by"]) == ("to", "from_func")
+
+    call_graph._function_neighbours(0x100, call_graph.Direction.CALLEES)
+    assert (asked["direction"], asked["collapse_by"]) == ("from", "to_func")
+
+
+def test_neighbours_refuses_a_direction_that_is_not_one(monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(call_graph, "get_xrefs_unified",
+                        lambda **kwargs: {"xrefs": []})
+
+    with pytest.raises(ValueError):
+        call_graph._function_neighbours(0x100, "sideways")
+    with pytest.raises(ValueError, match="walks two ways"):
+        call_graph._function_neighbours(0x100, call_graph.Direction.BOTH)

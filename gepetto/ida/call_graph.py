@@ -52,23 +52,23 @@ DEFAULT_MAX_CHARS_PER_FUNCTION = 1200
 _TRUNCATION_SUFFIX = "\n// ... truncated ..."
 
 
-def _function_neighbours(func_ea: int, direction: str) -> list[int]:
+def _function_neighbours(func_ea: int, direction: "Direction") -> list[int]:
     """Return unique function starts reached by call xrefs in ``direction``."""
+    query = Direction.parse(direction).xrefs
     xrefs = get_xrefs_unified(
         scope="function",
         subject=hex(func_ea),
-        direction="to" if direction == "callers" else "from",
+        direction=query.direction,
         kind="code",
         only_calls=True,
-        collapse_by="from_func" if direction == "callers" else "to_func",
+        collapse_by=query.collapse_by,
         enrich_names=False,
     )
 
-    endpoint = "from_ea" if direction == "callers" else "to_ea"
     neighbours: list[int] = []
     for xref in xrefs["xrefs"]:
         try:
-            function = resolve_func(ea=int(xref[endpoint]))
+            function = resolve_func(ea=int(xref[query.endpoint]))
         except ValueError:
             continue
         if function.start_ea not in neighbours:
@@ -89,12 +89,38 @@ class BodyStatus(StrEnum):
     EMPTY = "empty"
 
 
+class XrefQuery(NamedTuple):
+    """How to ask the xref API for the edges going one way.
+
+    Three values that have to agree with each other -- ``to`` pairs with
+    ``from_func`` and ``from_ea``, never with the others -- so they are one
+    thing rather than three conditionals in a row that each have to be got
+    right separately.
+    """
+
+    direction: str
+    collapse_by: str
+    endpoint: str
+
+
 class Direction(StrEnum):
     """Which way to walk. Plural, because it names a set of edges."""
 
     CALLERS = "callers"
     CALLEES = "callees"
     BOTH = "both"
+
+    @property
+    def xrefs(self) -> XrefQuery:
+        """How to ask for this direction's edges.
+
+        BOTH walks two ways, so it has no single query and says so rather
+        than quietly answering for one of them.
+        """
+        try:
+            return _XREF_QUERY[self]
+        except KeyError:
+            raise ValueError(f"{self} walks two ways, not one") from None
 
     @classmethod
     def parse(cls, value: str) -> "Direction":
@@ -128,6 +154,11 @@ class Relation(StrEnum):
             raise ValueError(
                 f"{direction!r} names two relations, not one") from None
 
+
+_XREF_QUERY = {
+    Direction.CALLERS: XrefQuery("to", "from_func", "from_ea"),
+    Direction.CALLEES: XrefQuery("from", "to_func", "to_ea"),
+}
 
 _RELATION_FOR_DIRECTION = {
     Direction.CALLERS: Relation.CALLER,
