@@ -28,7 +28,7 @@ def test_collect_call_graph_context_uses_breadth_first_order_within_the_budget(m
     monkeypatch.setattr(
         call_graph,
         "_decompiled_body",
-        lambda ea, _max_chars: (f"body_{ea:X}", False),
+        lambda ea, _max_chars: (f"body_{ea:X}", False, "ok"),
     )
 
     result = call_graph.collect_call_graph_context(
@@ -44,12 +44,14 @@ def test_collect_call_graph_context_uses_breadth_first_order_within_the_budget(m
         "name": "function_100",
         "code": "body_100",
         "truncated": False,
+        "status": "ok",
     }
     assert result["neighbours"] == [
         {
             "ea": "0x200",
             "name": "function_200",
-            "relation": "callee",
+            "relations": ["callee"],
+            "status": "ok",
             "depth": 1,
             "code": "body_200",
             "truncated": False,
@@ -57,7 +59,8 @@ def test_collect_call_graph_context_uses_breadth_first_order_within_the_budget(m
         {
             "ea": "0x300",
             "name": "function_300",
-            "relation": "callee",
+            "relations": ["callee"],
+            "status": "ok",
             "depth": 1,
             "code": "body_300",
             "truncated": False,
@@ -65,7 +68,8 @@ def test_collect_call_graph_context_uses_breadth_first_order_within_the_budget(m
         {
             "ea": "0x400",
             "name": "function_400",
-            "relation": "callee",
+            "relations": ["callee"],
+            "status": "ok",
             "depth": 2,
             "code": "body_400",
             "truncated": False,
@@ -98,7 +102,7 @@ def test_collect_call_graph_context_skips_call_targets_outside_a_function(monkey
             ] if kwargs["subject"] == "0x100" else [],
         },
     )
-    monkeypatch.setattr(call_graph, "_decompiled_body", lambda ea, _max_chars: (f"body_{ea:X}", False))
+    monkeypatch.setattr(call_graph, "_decompiled_body", lambda ea, _max_chars: (f"body_{ea:X}", False, "ok"))
 
     result = call_graph.collect_call_graph_context(
         0x100,
@@ -117,7 +121,7 @@ def test_decompiled_body_honors_an_exact_unicode_code_point_budget(monkeypatch):
         lambda **_kwargs: "\u03b1\u03b2\u03b3\u03b4\u03b5\u03b6\u03b7\u03b8\u03b9\u03ba\u03bb\u03bc\u03bd\u03be\u03bf\u03c0\u03c1\u03c3\u03c4\u03c5\u03c6\u03c7\u03c8\u03c9\u03b1\u03b2\u03b3\u03b4\u03b5\u03b6",
     )
 
-    code, truncated = call_graph._decompiled_body(0x100, 25)
+    code, truncated, status = call_graph._decompiled_body(0x100, 25)
 
     assert code == "\u03b1\u03b2\u03b3\u03b4\n// ... truncated ..."
     assert len(code) == 25
@@ -134,7 +138,7 @@ def test_collect_call_graph_context_honors_an_explicit_body_budget(monkeypatch):
     monkeypatch.setattr(
         call_graph,
         "_decompiled_body",
-        lambda _ea, budget: (seen_budgets.append(budget) or f"body_budget_{budget}", False),
+        lambda _ea, budget: (seen_budgets.append(budget) or f"body_budget_{budget}", False, "ok"),
     )
 
     result = call_graph.collect_call_graph_context(0x100, max_chars_per_function=7)
@@ -147,7 +151,7 @@ def test_collect_call_graph_context_allows_a_zero_depth_budget(monkeypatch):
     monkeypatch.setattr(call_graph, "resolve_func", lambda ea: SimpleNamespace(start_ea=ea))
     monkeypatch.setattr(call_graph, "get_func_name", lambda function: f"function_{function.start_ea:X}")
     monkeypatch.setattr(call_graph, "_function_neighbours", lambda *_args: [0x200])
-    monkeypatch.setattr(call_graph, "_decompiled_body", lambda ea, _budget: (f"body_{ea:X}", False))
+    monkeypatch.setattr(call_graph, "_decompiled_body", lambda ea, _budget: (f"body_{ea:X}", False, "ok"))
 
     result = call_graph.collect_call_graph_context(
         0x100,
@@ -158,3 +162,205 @@ def test_collect_call_graph_context_allows_a_zero_depth_budget(monkeypatch):
 
     assert result["neighbours"] == []
     assert result["limits"]["max_depth"] == 0
+
+
+def _fake_graph(monkeypatch, graph, bodies=None):
+    """A call graph with no IDA behind it.
+
+    ``graph`` maps ``(ea, direction)`` to neighbours, so a test can make two
+    functions call each other and have the traversal see it from both sides.
+    """
+    monkeypatch.setattr(call_graph, "resolve_func",
+                        lambda ea: SimpleNamespace(start_ea=ea))
+    monkeypatch.setattr(call_graph, "get_func_name",
+                        lambda function: f"function_{function.start_ea:X}")
+    monkeypatch.setattr(call_graph, "_function_neighbours",
+                        lambda ea, direction: graph.get((ea, direction), []))
+    if bodies is None:
+        monkeypatch.setattr(call_graph, "_decompiled_body",
+                            lambda ea, _budget: (f"body_{ea:X}", False, "ok"))
+
+
+# --- every returned body is bounded, diagnostics included --------------------
+
+def test_a_decompilation_failure_is_bounded_like_any_other_body(monkeypatch):
+    """A failure message is text the caller did not ask for and cannot size."""
+    monkeypatch.setattr(call_graph, "decompile_function",
+                        lambda ea: (_ for _ in ()).throw(RuntimeError("boom " * 200)))
+
+    code, truncated, status = call_graph._decompiled_body(0x100, 40)
+
+    assert len(code) == 40
+    assert truncated is True
+    assert status == "failed"
+
+
+def test_an_empty_decompilation_is_bounded_too(monkeypatch):
+    monkeypatch.setattr(call_graph, "decompile_function", lambda ea: "   \n  ")
+
+    code, truncated, status = call_graph._decompiled_body(0x100, 12)
+
+    assert len(code) == 12
+    assert truncated is True
+    assert status == "empty"
+
+
+def test_the_smallest_budget_still_holds_on_every_path(monkeypatch):
+    """max_chars_per_function=1 is the case that made the bug obvious."""
+    monkeypatch.setattr(call_graph, "decompile_function", lambda ea: "int f(void) { return 1; }")
+    assert len(call_graph._decompiled_body(0x100, 1)[0]) == 1
+
+    monkeypatch.setattr(call_graph, "decompile_function", lambda ea: "")
+    assert len(call_graph._decompiled_body(0x100, 1)[0]) == 1
+
+    monkeypatch.setattr(call_graph, "decompile_function",
+                        lambda ea: (_ for _ in ()).throw(RuntimeError("nope")))
+    assert len(call_graph._decompiled_body(0x100, 1)[0]) == 1
+
+
+def test_status_survives_a_bound_that_destroys_the_message(monkeypatch):
+    """Truncated to a character, `/` is indistinguishable from code."""
+    monkeypatch.setattr(call_graph, "decompile_function",
+                        lambda ea: (_ for _ in ()).throw(RuntimeError("nope")))
+
+    _code, _truncated, status = call_graph._decompiled_body(0x100, 1)
+
+    assert status == "failed"
+
+
+def test_a_body_that_fits_is_not_marked_truncated(monkeypatch):
+    monkeypatch.setattr(call_graph, "decompile_function", lambda ea: "int f;")
+
+    code, truncated, status = call_graph._decompiled_body(0x100, 80)
+
+    assert (code, truncated, status) == ("int f;", False, "ok")
+
+
+# --- direction="both" must not lose a relation -------------------------------
+
+def test_mutual_recursion_is_reported_from_both_sides(monkeypatch):
+    """A single visited set records B under whichever direction reached it
+    first and drops the other, so `both` returned less than callers plus
+    callees."""
+    _fake_graph(monkeypatch, {
+        (0x100, "callers"): [0x200],
+        (0x100, "callees"): [0x200],
+        (0x200, "callers"): [0x100],
+        (0x200, "callees"): [0x100],
+    })
+
+    result = call_graph.collect_call_graph_context(
+        0x100, direction="both", max_depth=1, max_functions=8)
+
+    assert len(result["neighbours"]) == 1, "one function, not two entries"
+    assert result["neighbours"][0]["relations"] == ["callee", "caller"]
+
+
+def test_both_returns_the_union_of_the_single_directions(monkeypatch):
+    graph = {
+        (0x100, "callers"): [0x200],
+        (0x100, "callees"): [0x300],
+    }
+    _fake_graph(monkeypatch, graph)
+
+    def names(direction):
+        found = call_graph.collect_call_graph_context(
+            0x100, direction=direction, max_depth=1, max_functions=8)
+        return {n["ea"] for n in found["neighbours"]}
+
+    assert names("both") == names("callers") | names("callees")
+
+
+def test_a_one_sided_neighbour_keeps_its_single_relation(monkeypatch):
+    _fake_graph(monkeypatch, {(0x100, "callees"): [0x200]})
+
+    result = call_graph.collect_call_graph_context(
+        0x100, direction="both", max_depth=1, max_functions=8)
+
+    assert result["neighbours"][0]["relations"] == ["callee"]
+
+
+def test_a_neighbour_reached_twice_is_decompiled_once(monkeypatch):
+    """Aggregating is not only tidier output; it halves the work."""
+    decompiled = []
+    _fake_graph(monkeypatch, {
+        (0x100, "callers"): [0x200],
+        (0x100, "callees"): [0x200],
+    }, bodies=True)
+    monkeypatch.setattr(
+        call_graph, "_decompiled_body",
+        lambda ea, _budget: (decompiled.append(ea) or f"body_{ea:X}", False, "ok"))
+
+    call_graph.collect_call_graph_context(
+        0x100, direction="both", max_depth=1, max_functions=8)
+
+    assert decompiled.count(0x200) == 1, "reached as caller and as callee"
+    assert decompiled == [0x100, 0x200], "the root, then the neighbour, once"
+
+
+def test_the_nearer_depth_wins_when_a_neighbour_is_reached_twice(monkeypatch):
+    _fake_graph(monkeypatch, {
+        (0x100, "callees"): [0x200],
+        (0x200, "callees"): [0x300],
+        (0x100, "callers"): [0x300],
+    })
+
+    result = call_graph.collect_call_graph_context(
+        0x100, direction="both", max_depth=2, max_functions=8)
+
+    reached = {n["ea"]: n for n in result["neighbours"]}
+    assert reached["0x300"]["depth"] == 1, "a caller at depth 1 beats a callee at 2"
+    assert reached["0x300"]["relations"] == ["callee", "caller"]
+
+
+# --- budget_exhausted means truncated, not merely full -----------------------
+
+def test_a_budget_that_fills_exactly_is_not_a_truncation(monkeypatch):
+    """The old flag was `returned == max_functions`, true even when the graph
+    had nothing else to give."""
+    _fake_graph(monkeypatch, {(0x100, "callees"): [0x200, 0x300]})
+
+    result = call_graph.collect_call_graph_context(
+        0x100, direction="callees", max_depth=2, max_functions=2)
+
+    assert result["limits"]["returned"] == 2
+    assert result["limits"]["budget_exhausted"] is False
+
+
+def test_evidence_left_out_is_reported_as_truncation(monkeypatch):
+    _fake_graph(monkeypatch, {(0x100, "callees"): [0x200, 0x300, 0x400]})
+
+    result = call_graph.collect_call_graph_context(
+        0x100, direction="callees", max_depth=2, max_functions=2)
+
+    assert result["limits"]["returned"] == 2
+    assert result["limits"]["budget_exhausted"] is True
+
+
+def test_a_neighbour_cut_off_a_level_down_still_counts(monkeypatch):
+    """The budget can fill exactly as a depth finishes, leaving whole nodes
+    unexplored. Nothing was refused on the way, so it takes a look to tell."""
+    _fake_graph(monkeypatch, {
+        (0x100, "callees"): [0x200, 0x300],
+        (0x300, "callees"): [0x400],
+    })
+
+    result = call_graph.collect_call_graph_context(
+        0x100, direction="callees", max_depth=2, max_functions=2)
+
+    assert result["limits"]["returned"] == 2
+    assert result["limits"]["budget_exhausted"] is True
+
+
+def test_an_already_seen_neighbour_is_not_counted_as_lost(monkeypatch):
+    """Re-reaching a function already returned is not evidence left out."""
+    _fake_graph(monkeypatch, {
+        (0x100, "callees"): [0x200, 0x300],
+        (0x200, "callees"): [0x300],
+        (0x300, "callees"): [0x200],
+    })
+
+    result = call_graph.collect_call_graph_context(
+        0x100, direction="callees", max_depth=3, max_functions=2)
+
+    assert result["limits"]["budget_exhausted"] is False
