@@ -4,6 +4,7 @@ import os
 import pathlib
 import re
 import shutil
+from typing import Any, cast
 
 import gepetto.paths
 from gepetto.models.model_manager import instantiate_model, load_available_models, get_fallback_model
@@ -13,7 +14,9 @@ from gepetto.models.model_manager import instantiate_model, load_available_model
 # =============================================================================
 
 # Active language model instance for processing requests
-model = None
+#: The active provider. ui.py returns PLUGIN_SKIP while this is still
+#: None, so nothing downstream of plugin init sees it unset.
+model: Any = None
 
 # INI configuration file parser object
 parsed_ini = None
@@ -28,7 +31,7 @@ _translator = None
 language = None
 
 # Available locales, loaded from the locales directory
-available_locales = None
+available_locales: set[str] = set()
 
 # =============================================================================
 
@@ -291,8 +294,11 @@ def auto_show_status_panel_enabled() -> bool:
     global parsed_ini
     if parsed_ini is None:
         load_config()
+    # load_config() assigns parsed_ini before anything in it can fail, so it is
+    # set by here or load_config() raised. A guard would be unreachable.
+    ini = cast(configparser.RawConfigParser, parsed_ini)
     try:
-        return parsed_ini.getboolean("Gepetto", "AUTO_SHOW_STATUS_PANEL")
+        return ini.getboolean("Gepetto", "AUTO_SHOW_STATUS_PANEL")
     except (configparser.NoOptionError, configparser.NoSectionError, ValueError):
         return True
 

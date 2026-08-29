@@ -366,7 +366,7 @@ def _convert_messages(query: Any) -> tuple[str | None, list[types.Content]]:
             continue
 
         flush_tool_parts()
-        parts: list[types.Part] = []
+        parts = []
         for part in message.get("parts") or []:
             part = _to_plain(part)
             if isinstance(part, dict) and "text" in part:

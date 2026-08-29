@@ -54,11 +54,17 @@ class NoStatusPanel(StatusPanel):
     def log_user(self, text: str) -> None:
         pass
 
-    def log_request_started(self) -> str:
+    def submit_chat(self, text: str) -> None:
+        # There is no chat input without a panel, so nothing can call
+        # this; it is here because the interface declares it, and the
+        # rest of this class answers every method the same way.
         pass
 
-    def log_request_finished(self, elapsed_seconds: float) -> str:
-        pass
+    def log_request_started(self) -> str | None:
+        return None
+
+    def log_request_finished(self, elapsed_seconds: float) -> str | None:
+        return None
 
     def mark_error(self, message: str) -> None:
         pass

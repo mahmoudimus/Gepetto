@@ -62,7 +62,8 @@ def comment_callback(address, view, response, start_time):
 
     elapsed_time = time.time() - start_time
     response_finished = STATUS_PANEL.log_request_finished(elapsed_time)
-    print(response_finished)
+    if response_finished:
+        print(response_finished)
 
 # -----------------------------------------------------------------------------
 
@@ -119,7 +120,8 @@ class ExplainHandler(idaapi.action_handler_t):
               """,
             functools.partial(comment_callback, address=idaapi.get_screen_ea(), view=v, start_time=start_time))
         request_sent = STATUS_PANEL.log_request_started()
-        print(request_sent)
+        if request_sent:
+            print(request_sent)
         return 1
 
     # This action is always available.
@@ -144,7 +146,8 @@ def rename_callback(address, view, response, start_time):
 
     elapsed_time = time.time() - start_time
     timer_finished = STATUS_PANEL.log_request_finished(elapsed_time)
-    print(timer_finished)
+    if timer_finished:
+        print(timer_finished)
 
     response_text = response.content if hasattr(response, "content") else response
     if not isinstance(response_text, str):
@@ -306,7 +309,8 @@ class RenameHandler(idaapi.action_handler_t):
             functools.partial(rename_callback, address=idaapi.get_screen_ea(), view=v, start_time=start_time),
             additional_model_options={"response_format": {"type": "json_object"}})
         request_sent = STATUS_PANEL.log_request_started()
-        print(request_sent)
+        if request_sent:
+            print(request_sent)
         return 1
 
     # This action is always available.
@@ -364,7 +368,8 @@ class GenerateCCodeHandler(idaapi.action_handler_t):
             functools.partial(self._save_c_code, view=v, start_time=start_time)
         )
         request_sent = STATUS_PANEL.log_request_started()
-        print(request_sent)
+        if request_sent:
+            print(request_sent)
         return 1
 
     def _save_c_code(self, view, response, start_time):
@@ -377,7 +382,8 @@ class GenerateCCodeHandler(idaapi.action_handler_t):
 
         elapsed_time = time.time() - start_time
         timer_finished = STATUS_PANEL.log_request_finished(elapsed_time)
-        print(timer_finished)
+        if timer_finished:
+            print(timer_finished)
         
         code_text = response.content if hasattr(response, "content") else response
         project_name = idaapi.get_root_filename()
@@ -419,7 +425,8 @@ class GeneratePythonCodeHandler(idaapi.action_handler_t):
             functools.partial(self._save_python_code, view=v, start_time=start_time)
         )
         request_sent = STATUS_PANEL.log_request_started()
-        print(request_sent)
+        if request_sent:
+            print(request_sent)
         return 1
 
     def _save_python_code(self, view, response, start_time):
@@ -432,7 +439,8 @@ class GeneratePythonCodeHandler(idaapi.action_handler_t):
 
         elapsed_time = time.time() - start_time
         timer_finished = STATUS_PANEL.log_request_finished(elapsed_time)
-        print(timer_finished)
+        if timer_finished:
+            print(timer_finished)
         
         code_text = response.content if hasattr(response, "content") else response
         if not isinstance(code_text, str):

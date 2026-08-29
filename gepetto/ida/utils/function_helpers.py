@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 import idaapi
 import ida_funcs
@@ -26,7 +26,7 @@ def parse_ea(ea_val):
 
 def resolve_ea(name) -> int:
     """Resolve a name to its effective address."""
-    out = {"ea": None, "err": None}
+    out: dict[str, Any] = {"ea": None, "err": None}
 
     def _do():
         try:
@@ -49,7 +49,7 @@ def resolve_ea(name) -> int:
 
 def resolve_func(ea=None, name=None):
     """Resolve a function by EA or name on the UI thread."""
-    out = {"func": None, "err": None}
+    out: dict[str, Any] = {"func": None, "err": None}
 
     def _do():
         try:

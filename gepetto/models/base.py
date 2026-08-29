@@ -3,6 +3,14 @@ import abc
 
 class LanguageModel(metaclass=abc.ABCMeta):
     @abc.abstractmethod
+    def __init__(self, model: str) -> None:
+        """Providers are built from the name of the model they will serve.
+
+        Declared because instantiate_model() calls the class with exactly
+        that, and every provider already implements it.
+        """
+
+    @abc.abstractmethod
     def query_model_async(self, query, cb, stream, additional_model_options) -> None:
         pass
 

@@ -69,7 +69,7 @@ class GepettoPlugin(idaapi.plugin_t):
     comment = _("Uses {model} to enrich the decompiler's output").format(model=str(gepetto.config.model))
     help = _("See usage instructions on GitHub")
     menu = None
-    model_action_map = {}
+    model_action_map: dict[str, str] = {}
 
     # -----------------------------------------------------------------------------
 

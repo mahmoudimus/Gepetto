@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any
 
 import ida_kernwin
 import ida_idaapi
@@ -78,7 +79,7 @@ def _collect_reasoning_text(value, collector, depth=0):
 def _append_reasoning_from_delta(delta) -> None:
     if delta is None:
         return
-    containers = []
+    containers: list[Any] = []
     if isinstance(delta, dict):
         containers.extend(delta.get(key) for key in _REASONING_KEYS if delta.get(key))
         content = delta.get("content")
