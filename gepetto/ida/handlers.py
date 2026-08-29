@@ -8,7 +8,8 @@ import ida_hexrays  # type: ignore
 import idc  # type: ignore
 
 import gepetto.config
-from gepetto.ida.call_graph import Direction, collect_call_graph_context
+from gepetto.ida.call_graph import (CallGraphContext, Direction,
+                                    collect_call_graph_context)
 from gepetto.ida.utils.thread_helpers import *
 from gepetto.models.model_manager import instantiate_model
 from gepetto.ida.status_panel.panel_interface import LogCategory, LogLevel
@@ -19,9 +20,16 @@ _ = gepetto.config._
 STATUS_PANEL = get_status_panel()
 
 
-def _format_explain_call_graph_context(context):
-    neighbours = context.get("neighbours", []) if isinstance(context, dict) else []
-    if not isinstance(neighbours, list) or not neighbours:
+def _format_explain_call_graph_context(context: CallGraphContext) -> str:
+    """Render a call-graph slice as prompt evidence.
+
+    Every key is read directly rather than with a default. A default turns a
+    key this module and the collector disagree about into a plausible-looking
+    prompt, which is how `relation` becoming `relations` went unnoticed; a
+    KeyError reaches the caller below, which reports it and carries on.
+    """
+    neighbours = context["neighbours"]
+    if not neighbours:
         return ""
 
     lines = [
@@ -29,28 +37,29 @@ def _format_explain_call_graph_context(context):
         "Use these bodies as evidence of relationships and behavior; separate direct observations from inference.",
     ]
     for neighbour in neighbours:
-        if not isinstance(neighbour, dict):
-            continue
         # A neighbour reached from both directions carries both relations, so
         # "caller, callee" is a fact about the pair worth putting in the prompt.
-        relations = neighbour.get("relations") or []
+        relations = neighbour["relations"]
         relation = ", ".join(relations) if relations else "neighbour"
-        name = neighbour.get("name", "<unnamed>")
-        ea = neighbour.get("ea", "<unknown EA>")
-        depth = neighbour.get("depth", "?")
-        code = neighbour.get("code", "")
         lines.extend(
             [
-                f"\n[{relation}, depth {depth}] {name} ({ea})",
+                f"\n[{relation}, depth {neighbour['depth']}] "
+                f"{neighbour['name']} ({neighbour['ea']})",
                 "```C",
-                str(code),
+                str(neighbour["code"]),
                 "```",
             ]
         )
     return "\n".join(lines) + "\n"
 
 
-def _collect_explain_call_graph_context(ea):
+def _collect_explain_call_graph_context(ea: int) -> str:
+    """Bounded relationship evidence for ``ea``, or nothing.
+
+    Formatting is inside the guard along with collection: evidence is an
+    enhancement to Explain, so no failure of it should be able to take the
+    action itself down.
+    """
     try:
         context = collect_call_graph_context(
             ea,
@@ -59,10 +68,11 @@ def _collect_explain_call_graph_context(ea):
             max_functions=4,
             max_chars_per_function=600,
         )
+        return _format_explain_call_graph_context(context)
     except Exception as exc:
         print(f"Gepetto: call-graph evidence unavailable: {exc}")
         return ""
-    return _format_explain_call_graph_context(context)
+
 
 def comment_callback(address, view, response, start_time):
     """Callback that sets a comment at the given address.

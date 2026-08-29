@@ -695,3 +695,30 @@ def test_a_window_marks_only_the_ends_it_actually_elided():
 
     tail = call_graph._Window(lines, 2, 3)
     assert tail.elisions == (call_graph._TRUNCATION_PREFIX, "")
+
+
+def test_the_payload_matches_the_shape_it_promises(monkeypatch):
+    """Nothing type-checks this project, so the TypedDicts are asserted here.
+
+    They exist because the consumer reads the payload by key, and a key
+    renamed on one side is invisible: when `relation` became `relations` the
+    Explain prompt labelled every neighbour "neighbour" and every test passed.
+    An annotation nothing enforces would have been just as quiet, so the keys
+    are compared against what the code actually emits.
+    """
+    monkeypatch.setattr(call_graph, "resolve_func",
+                        lambda ea: SimpleNamespace(start_ea=ea))
+    monkeypatch.setattr(call_graph, "get_func_name",
+                        lambda function: f"function_{function.start_ea:X}")
+    monkeypatch.setattr(call_graph, "_function_neighbours",
+                        lambda ea, direction: [0x200] if ea == 0x100 else [])
+    monkeypatch.setattr(call_graph, "decompile_function", lambda ea: f"body_{ea:X}")
+
+    result = call_graph.collect_call_graph_context(0x100, direction="both")
+
+    assert set(result) == set(call_graph.CallGraphContext.__annotations__)
+    assert set(result["root"]) == set(call_graph.RootPayload.__annotations__)
+    assert set(result["limits"]) == set(call_graph.LimitsPayload.__annotations__)
+    assert result["neighbours"], "a neighbour is needed to check its shape"
+    for neighbour in result["neighbours"]:
+        assert set(neighbour) == set(call_graph.NeighbourPayload.__annotations__)

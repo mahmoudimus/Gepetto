@@ -20,15 +20,21 @@ model and prompt shape.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from typing import Any, NamedTuple
+import sys
 
-try:  # 3.11+
+from dataclasses import dataclass, field, replace
+from typing import Any, NamedTuple, TypedDict
+
+# A version check rather than try/except ImportError: both say the same thing
+# to the interpreter, but only this one says it to a type checker, which reads
+# sys.version_info natively and otherwise collapses StrEnum to str -- taking
+# Direction, Relation and BodyStatus down with it.
+if sys.version_info >= (3, 11):
     from enum import StrEnum
-except ImportError:  # 3.10, which this project still supports
+else:  # 3.10, which this project still supports
     from enum import Enum
 
-    class StrEnum(str, Enum):
+    class StrEnum(str, Enum):  # type: ignore[no-redef]
         """What 3.11 added, for the version below it.
 
         A bare ``(str, Enum)`` is not the same thing: it serialises correctly
@@ -38,7 +44,7 @@ except ImportError:  # 3.10, which this project still supports
         """
 
         __str__ = str.__str__
-        __format__ = str.__format__
+        __format__ = str.__format__  # type: ignore[assignment]
 
 from gepetto.ida.tools.decompile_function import decompile_function
 from gepetto.ida.tools.get_xrefs import get_xrefs_unified
@@ -141,6 +147,53 @@ _RELATION_FOR_DIRECTION = {
     Direction.CALLERS: Relation.CALLER,
     Direction.CALLEES: Relation.CALLEE,
 }
+
+
+class NeighbourPayload(TypedDict):
+    """One neighbour as it leaves this module.
+
+    Written down because the consumer reads it by key, and a key renamed on
+    one side of that is invisible: when ``relation`` became ``relations`` the
+    prompt silently labelled every neighbour "neighbour" and every test still
+    passed.  Nothing type-checks this project, so the guarantee comes from
+    ``test_the_payload_matches_the_shape_it_promises`` rather than from mypy.
+    """
+
+    ea: str
+    name: str
+    relations: list[Relation]
+    depth: int
+    code: str
+    truncated: bool
+    status: BodyStatus
+
+
+class RootPayload(TypedDict):
+    """The function asked about. It has no relation to itself, and no depth."""
+
+    ea: str
+    name: str
+    code: str
+    truncated: bool
+    status: BodyStatus
+
+
+class LimitsPayload(TypedDict):
+    """What was asked for, and whether it was enough."""
+
+    direction: Direction
+    max_depth: int
+    max_functions: int
+    returned: int
+    budget_exhausted: bool
+
+
+class CallGraphContext(TypedDict):
+    """The whole slice."""
+
+    root: RootPayload
+    neighbours: list[NeighbourPayload]
+    limits: LimitsPayload
 
 
 class Truncated(NamedTuple):
@@ -324,7 +377,7 @@ class Neighbour:
             self.relations = sorted(self.relations + [relation])
         self.depth = min(self.depth, depth)
 
-    def as_payload(self) -> dict[str, Any]:
+    def as_payload(self) -> NeighbourPayload:
         return {
             "ea": hex(self.ea),
             "name": self.name,
@@ -374,11 +427,11 @@ def _unvisited_neighbour_exists(frontier, seen, root_ea, max_depth) -> bool:
 def _walk(
     root_ea: int,
     root_name: str,
-    direction: str,
+    direction: Direction,
     max_depth: int,
     max_functions: int,
     max_chars_per_function: int,
-) -> tuple[list[dict[str, Any]], bool]:
+) -> tuple[list[NeighbourPayload], bool]:
     """Breadth-first neighbourhood of ``root_ea``, excluding the root.
 
     Traversal state is kept per direction.  A single shared set collapses the
@@ -405,10 +458,10 @@ def _walk(
     # Frontier entries abandoned when the budget filled. They were never
     # enumerated, so whether they held anything is a question to answer rather
     # than assume -- in either direction.
-    unexplored: list[tuple[int, int, str]] = []
+    unexplored: list[tuple[int, int, Direction]] = []
 
     while frontier and len(order) < max_functions:
-        next_frontier: list[tuple[int, int, str]] = []
+        next_frontier: list[tuple[int, int, Direction]] = []
         for position, (ea, depth, current_direction) in enumerate(frontier):
             if len(order) >= max_functions:
                 unexplored.extend(frontier[position:])
@@ -464,17 +517,17 @@ def _walk(
 def collect_call_graph_context(
     ea: int | str | None = None,
     *,
-    direction: str = "both",
+    direction: Direction | str = Direction.BOTH,
     max_depth: int = DEFAULT_MAX_DEPTH,
     max_functions: int = DEFAULT_MAX_FUNCTIONS,
     max_chars_per_function: int = DEFAULT_MAX_CHARS_PER_FUNCTION,
-) -> dict[str, Any]:
+) -> CallGraphContext:
     """Return a bounded breadth-first call-graph slice around a function.
 
     The returned root and each neighbour include a decompiled body.  This is a
     library API: callers own policy such as configuration and prompt budgets.
     """
-    direction = Direction.parse(direction)
+    wanted = Direction.parse(direction)
 
     max_depth = _limit(max_depth, "max_depth", 0)
     max_functions = _limit(max_functions, "max_functions", 0)
@@ -488,7 +541,7 @@ def collect_call_graph_context(
     neighbours, budget_exhausted = _walk(
         root_ea,
         root_name,
-        direction,
+        wanted,
         max_depth,
         max_functions,
         max_chars_per_function,
@@ -504,7 +557,7 @@ def collect_call_graph_context(
         },
         "neighbours": neighbours,
         "limits": {
-            "direction": direction,
+            "direction": wanted,
             "max_depth": max_depth,
             "max_functions": max_functions,
             "returned": len(neighbours),
@@ -515,4 +568,5 @@ def collect_call_graph_context(
     }
 
 
-__all__ = ["BodyStatus", "collect_call_graph_context"]
+__all__ = ["BodyStatus", "CallGraphContext", "NeighbourPayload",
+           "collect_call_graph_context"]

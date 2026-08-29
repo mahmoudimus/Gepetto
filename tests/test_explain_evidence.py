@@ -96,7 +96,8 @@ def test_a_neighbour_with_no_relations_is_still_rendered():
     from gepetto.ida.handlers import _format_explain_call_graph_context
 
     text = _format_explain_call_graph_context({
-        "neighbours": [{"name": "helper", "ea": "0x1", "depth": 1, "code": "x"}]
+        "neighbours": [{"relations": [], "name": "helper", "ea": "0x1",
+                        "depth": 1, "code": "x"}]
     })
 
     assert "[neighbour, depth 1] helper (0x1)" in text
