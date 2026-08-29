@@ -664,7 +664,11 @@ def test_a_window_measures_itself_exactly_as_it_renders_itself():
         ["one", "two", "three"],
         ["", "x", "", "y", ""],                 # blanks at both ends and inside
         ["  r = sub_1(a);", "", "  return r;"],
-        ["éèê", "你好"],  # code points, not bytes
+        # Escaped so the source stays ASCII; these are the same three
+        # accented letters and two CJK characters at runtime, and they
+        # are here because the budget is a code-point limit, not a byte
+        # one -- len() must agree with str() about that.
+        ["\u00e9\u00e8\u00ea", "\u4f60\u597d"],
         ["x" * 500, "y" * 500],
         [""] * 7,
     ]
