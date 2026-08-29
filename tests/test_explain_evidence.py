@@ -128,7 +128,7 @@ def test_the_formatter_reads_what_the_collector_actually_produces(monkeypatch):
     # The collector's own type, not a look-alike tuple: a fake that rebuilds
     # the shape by hand stops matching the moment a field is added.
     monkeypatch.setattr(call_graph, "_decompiled_body",
-                        lambda ea, _budget: call_graph.Body(
+                        lambda ea, _budget, _anchor=None: call_graph.Body(
                             f"body_{ea:X}", False, call_graph.BodyStatus.OK))
 
     context = call_graph.collect_call_graph_context(

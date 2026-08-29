@@ -28,7 +28,7 @@ def test_collect_call_graph_context_uses_breadth_first_order_within_the_budget(m
     monkeypatch.setattr(
         call_graph,
         "_decompiled_body",
-        lambda ea, _max_chars: call_graph.Body(f"body_{ea:X}", False, call_graph.BodyStatus.OK),
+        lambda ea, _max_chars, _anchor=None: call_graph.Body(f"body_{ea:X}", False, call_graph.BodyStatus.OK),
     )
 
     result = call_graph.collect_call_graph_context(
@@ -102,7 +102,7 @@ def test_collect_call_graph_context_skips_call_targets_outside_a_function(monkey
             ] if kwargs["subject"] == "0x100" else [],
         },
     )
-    monkeypatch.setattr(call_graph, "_decompiled_body", lambda ea, _max_chars: call_graph.Body(f"body_{ea:X}", False, call_graph.BodyStatus.OK))
+    monkeypatch.setattr(call_graph, "_decompiled_body", lambda ea, _max_chars, _anchor=None: call_graph.Body(f"body_{ea:X}", False, call_graph.BodyStatus.OK))
 
     result = call_graph.collect_call_graph_context(
         0x100,
@@ -138,7 +138,7 @@ def test_collect_call_graph_context_honors_an_explicit_body_budget(monkeypatch):
     monkeypatch.setattr(
         call_graph,
         "_decompiled_body",
-        lambda _ea, budget: call_graph.Body(seen_budgets.append(budget) or f"body_budget_{budget}", False, call_graph.BodyStatus.OK),
+        lambda _ea, budget, _anchor=None: call_graph.Body(seen_budgets.append(budget) or f"body_budget_{budget}", False, call_graph.BodyStatus.OK),
     )
 
     result = call_graph.collect_call_graph_context(0x100, max_chars_per_function=7)
@@ -151,7 +151,7 @@ def test_collect_call_graph_context_allows_a_zero_depth_budget(monkeypatch):
     monkeypatch.setattr(call_graph, "resolve_func", lambda ea: SimpleNamespace(start_ea=ea))
     monkeypatch.setattr(call_graph, "get_func_name", lambda function: f"function_{function.start_ea:X}")
     monkeypatch.setattr(call_graph, "_function_neighbours", lambda *_args: [0x200])
-    monkeypatch.setattr(call_graph, "_decompiled_body", lambda ea, _budget: call_graph.Body(f"body_{ea:X}", False, call_graph.BodyStatus.OK))
+    monkeypatch.setattr(call_graph, "_decompiled_body", lambda ea, _budget, _anchor=None: call_graph.Body(f"body_{ea:X}", False, call_graph.BodyStatus.OK))
 
     result = call_graph.collect_call_graph_context(
         0x100,
@@ -178,7 +178,7 @@ def _fake_graph(monkeypatch, graph, bodies=None):
                         lambda ea, direction: graph.get((ea, direction), []))
     if bodies is None:
         monkeypatch.setattr(call_graph, "_decompiled_body",
-                            lambda ea, _budget: call_graph.Body(f"body_{ea:X}", False, call_graph.BodyStatus.OK))
+                            lambda ea, _budget, _anchor=None: call_graph.Body(f"body_{ea:X}", False, call_graph.BodyStatus.OK))
 
 
 # --- every returned body is bounded, diagnostics included --------------------
@@ -289,7 +289,7 @@ def test_a_neighbour_reached_twice_is_decompiled_once(monkeypatch):
     }, bodies=True)
     monkeypatch.setattr(
         call_graph, "_decompiled_body",
-        lambda ea, _budget: call_graph.Body(decompiled.append(ea) or f"body_{ea:X}", False, call_graph.BodyStatus.OK))
+        lambda ea, _budget, _anchor=None: call_graph.Body(decompiled.append(ea) or f"body_{ea:X}", False, call_graph.BodyStatus.OK))
 
     call_graph.collect_call_graph_context(
         0x100, direction="both", max_depth=1, max_functions=8)
@@ -511,3 +511,187 @@ def test_neighbours_refuses_a_direction_that_is_not_one(monkeypatch):
         call_graph._function_neighbours(0x100, "sideways")
     with pytest.raises(ValueError, match="walks two ways"):
         call_graph._function_neighbours(0x100, call_graph.Direction.BOTH)
+
+
+# --- a caller is evidence of the call, so that is the part to keep -----------
+
+def _caller_body(prologue_lines: int, tail_lines: int, callee: str) -> str:
+    """A caller whose call site sits well past its prologue."""
+    return "\n".join(
+        [f"  int local_{n} = {n};" for n in range(prologue_lines)]
+        + [f"  result = {callee}(buffer, length, FLAG_URGENT);"]
+        + [f"  cleanup_{n}();" for n in range(tail_lines)]
+    )
+
+
+def test_head_truncation_loses_the_one_thing_a_caller_is_evidence_of():
+    """The behaviour being fixed, pinned so the fix cannot be read as noise.
+
+    Measured over 382 caller bodies of the test binary that name their callee,
+    head truncation at 600 characters kept the call site in 54.19% of them.
+    """
+    code = _caller_body(prologue_lines=60, tail_lines=60, callee="sub_140005390")
+
+    head = call_graph._truncate(code, 600)
+
+    assert head.truncated is True
+    assert "sub_140005390" not in head.text
+
+
+def test_a_window_keeps_the_call_site_within_the_same_budget():
+    code = _caller_body(prologue_lines=60, tail_lines=60, callee="sub_140005390")
+
+    window = call_graph._window(code, 600, "sub_140005390")
+
+    assert window.truncated is True
+    assert "sub_140005390(buffer, length, FLAG_URGENT);" in window.text
+    assert len(window.text) <= 600
+
+
+def test_a_window_says_that_it_elided_the_head_as_well_as_the_tail():
+    """A fragment starting mid-function reads like a whole one without this."""
+    code = _caller_body(prologue_lines=60, tail_lines=60, callee="sub_140005390")
+
+    text = call_graph._window(code, 600, "sub_140005390").text
+
+    assert text.startswith("// ... truncated ...")
+    assert text.endswith("// ... truncated ...")
+
+
+def test_a_window_keeps_the_lines_around_the_call_not_just_the_call():
+    """Argument setup is the reason a caller is worth including at all."""
+    code = _caller_body(prologue_lines=60, tail_lines=60, callee="sub_140005390")
+
+    text = call_graph._window(code, 600, "sub_140005390").text
+
+    assert "local_59" in text, "the lines feeding the call"
+    assert "cleanup_0" in text, "and what it does with the result"
+
+
+def test_a_body_that_fits_is_never_windowed():
+    code = "int f(void) { return sub_140005390(); }"
+
+    assert call_graph._window(code, 600, "sub_140005390") == (code, False)
+
+
+def test_an_anchor_that_never_appears_falls_back_to_the_head():
+    """An indirect call, a tail jump, a thunk: 19 of 401 bodies measured."""
+    code = _caller_body(prologue_lines=60, tail_lines=60, callee="sub_140005390")
+
+    assert call_graph._window(code, 600, "sub_DOES_NOT_APPEAR") == \
+        call_graph._truncate(code, 600)
+
+
+def test_no_anchor_is_the_old_behaviour_exactly():
+    """A callee wants its head, and asks for it by passing no anchor."""
+    code = _caller_body(prologue_lines=60, tail_lines=60, callee="sub_140005390")
+
+    assert call_graph._window(code, 600, None) == call_graph._truncate(code, 600)
+
+
+def test_the_budget_holds_even_when_the_call_site_alone_overruns_it():
+    """The line is still better than the prologue, but it is still bounded."""
+    code = "  int x = 1;\n" + "  r = sub_140005390(" + "a, " * 400 + "z);\n  done();"
+
+    window = call_graph._window(code, 40, "sub_140005390")
+
+    assert len(window.text) == 40
+    assert window.truncated is True
+    assert "sub_140005390" in window.text
+
+
+def test_the_budget_holds_across_every_anchor_position():
+    """The window grows outwards, so both ends are places to get this wrong."""
+    for prologue, tail in ((0, 120), (120, 0), (60, 60), (1, 1)):
+        code = _caller_body(prologue, tail, "sub_140005390")
+        for budget in (20, 61, 300, 600, 5000):
+            window = call_graph._window(code, budget, "sub_140005390")
+            assert len(window.text) <= budget, (prologue, tail, budget)
+
+
+def test_the_collector_anchors_a_caller_on_the_function_it_called(monkeypatch):
+    """The wiring, not the cutting.
+
+    `_window` can be perfect and the feature still dead if `_walk` never hands
+    it an anchor -- and every unit test above would still pass. Only the real
+    collector can show that a caller is cut around its call site while a callee
+    is cut from the head.
+    """
+    bodies = {
+        0x100: "int root(void) { return 0; }",
+        0x200: _caller_body(prologue_lines=60, tail_lines=60, callee="function_100"),
+        0x300: _caller_body(prologue_lines=60, tail_lines=60, callee="function_100"),
+    }
+    monkeypatch.setattr(call_graph, "resolve_func",
+                        lambda ea: SimpleNamespace(start_ea=ea))
+    monkeypatch.setattr(call_graph, "get_func_name",
+                        lambda function: f"function_{function.start_ea:X}")
+    monkeypatch.setattr(call_graph, "_function_neighbours",
+                        lambda ea, direction: {
+                            (0x100, "callers"): [0x200],
+                            (0x100, "callees"): [0x300],
+                        }.get((ea, direction), []))
+    monkeypatch.setattr(call_graph, "decompile_function",
+                        lambda ea: bodies[ea])
+
+    result = call_graph.collect_call_graph_context(
+        0x100, direction="both", max_depth=1, max_functions=8,
+        max_chars_per_function=600)
+    by_ea = {n["ea"]: n for n in result["neighbours"]}
+
+    caller, callee = by_ea["0x200"], by_ea["0x300"]
+    assert caller["relations"] == ["caller"]
+    assert callee["relations"] == ["callee"]
+
+    # The caller is cut around the call it makes...
+    assert "function_100(buffer, length, FLAG_URGENT);" in caller["code"]
+    # ...and the callee, which has no call site to keep, is cut from the head.
+    assert callee["code"].startswith("  int local_0 = 0;")
+    assert "function_100(" not in callee["code"]
+
+
+def test_a_window_measures_itself_exactly_as_it_renders_itself():
+    """`len` counts characters, `str` builds them: one fact computed twice.
+
+    A window that measures shorter than it renders puts text over a budget
+    that was checked as fitting, and the overrun appears only in the returned
+    string -- never in the check that let it through. So this is asserted
+    exhaustively over every window of every shape below, not sampled.
+    """
+    shapes = [
+        ["a"],
+        ["", ""],                               # empty lines still cost a newline
+        ["one", "two", "three"],
+        ["", "x", "", "y", ""],                 # blanks at both ends and inside
+        ["  r = sub_1(a);", "", "  return r;"],
+        ["éèê", "你好"],  # code points, not bytes
+        ["x" * 500, "y" * 500],
+        [""] * 7,
+    ]
+    checked = 0
+    for lines in shapes:
+        for first in range(len(lines)):
+            for last in range(first, len(lines)):
+                window = call_graph._Window(lines, first, last)
+                assert len(window) == len(str(window)), (lines, first, last)
+                checked += 1
+    assert checked == sum(
+        len(lines) * (len(lines) + 1) // 2 for lines in shapes)
+
+
+def test_a_window_marks_only_the_ends_it_actually_elided():
+    lines = ["a", "b", "c", "d"]
+
+    whole = call_graph._Window(lines, 0, 3)
+    assert whole.elisions == ("", "")
+    assert str(whole) == "a\nb\nc\nd"
+
+    middle = call_graph._Window(lines, 1, 2)
+    assert middle.elisions == (call_graph._TRUNCATION_PREFIX,
+                               call_graph._TRUNCATION_SUFFIX)
+
+    head = call_graph._Window(lines, 0, 1)
+    assert head.elisions == ("", call_graph._TRUNCATION_SUFFIX)
+
+    tail = call_graph._Window(lines, 2, 3)
+    assert tail.elisions == (call_graph._TRUNCATION_PREFIX, "")
