@@ -108,3 +108,42 @@ def test_cli_dispatcher_returns_an_error_for_an_unknown_tool():
             "context": {"tool_name": "not_a_gepetto_tool"},
         },
     }
+
+
+# --- the schema and the code have to agree on the vocabulary -----------------
+
+def test_the_schema_offers_exactly_the_directions_the_code_accepts():
+    """The schema is what the model is told; Direction is what the collector
+    takes. Nothing links them at runtime, so they can drift apart silently --
+    the model gets offered a value that raises, or is never told about one that
+    works. Neither shows up until someone reads a confusing tool error.
+    """
+    from gepetto.ida.call_graph import Direction
+
+    declared = _schema("get_call_graph_context")["parameters"]["properties"]["direction"]
+
+    assert declared["enum"] == [direction.value for direction in Direction]
+    assert declared["default"] == Direction.BOTH
+
+
+def test_every_direction_the_schema_offers_is_one_the_collector_parses():
+    """Equality of two lists is weaker than it looks; this checks the values
+    actually work rather than merely matching a list built the same way."""
+    from gepetto.ida.call_graph import Direction
+
+    declared = _schema("get_call_graph_context")["parameters"]["properties"]["direction"]
+
+    for value in declared["enum"]:
+        assert Direction.parse(value).value == value
+
+
+def test_the_adapter_defaults_to_the_direction_the_schema_advertises():
+    import inspect
+
+    from gepetto.ida.call_graph import Direction
+
+    declared = _schema("get_call_graph_context")["parameters"]["properties"]["direction"]
+    signature = inspect.signature(get_call_graph_context.get_call_graph_context)
+
+    assert signature.parameters["direction"].default == declared["default"]
+    assert signature.parameters["direction"].default is Direction.BOTH

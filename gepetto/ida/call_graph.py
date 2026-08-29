@@ -52,30 +52,6 @@ DEFAULT_MAX_CHARS_PER_FUNCTION = 1200
 _TRUNCATION_SUFFIX = "\n// ... truncated ..."
 
 
-def _function_neighbours(func_ea: int, direction: "Direction") -> list[int]:
-    """Return unique function starts reached by call xrefs in ``direction``."""
-    query = Direction.parse(direction).xrefs
-    xrefs = get_xrefs_unified(
-        scope="function",
-        subject=hex(func_ea),
-        direction=query.direction,
-        kind="code",
-        only_calls=True,
-        collapse_by=query.collapse_by,
-        enrich_names=False,
-    )
-
-    neighbours: list[int] = []
-    for xref in xrefs["xrefs"]:
-        try:
-            function = resolve_func(ea=int(xref[query.endpoint]))
-        except ValueError:
-            continue
-        if function.start_ea not in neighbours:
-            neighbours.append(function.start_ea)
-    return neighbours
-
-
 class BodyStatus(StrEnum):
     """Whether a returned body is code, and if it is not, why not.
 
@@ -123,7 +99,7 @@ class Direction(StrEnum):
             raise ValueError(f"{self} walks two ways, not one") from None
 
     @classmethod
-    def parse(cls, value: str) -> "Direction":
+    def parse(cls, value: str) -> Direction:
         try:
             return cls(value)
         except ValueError:
@@ -139,7 +115,7 @@ class Relation(StrEnum):
     CALLEE = "callee"
 
     @classmethod
-    def for_direction(cls, direction: "Direction") -> "Relation":
+    def for_direction(cls, direction: Direction) -> Relation:
         """The relation a neighbour has when reached walking this way.
 
         A mapping rather than a conditional, because the conditional had an
@@ -263,6 +239,30 @@ class Neighbour:
             "truncated": self.body.truncated,
             "status": self.body.status,
         }
+
+
+def _function_neighbours(func_ea: int, direction: Direction) -> list[int]:
+    """Return unique function starts reached by call xrefs in ``direction``."""
+    query = Direction.parse(direction).xrefs
+    xrefs = get_xrefs_unified(
+        scope="function",
+        subject=hex(func_ea),
+        direction=query.direction,
+        kind="code",
+        only_calls=True,
+        collapse_by=query.collapse_by,
+        enrich_names=False,
+    )
+
+    neighbours: list[int] = []
+    for xref in xrefs["xrefs"]:
+        try:
+            function = resolve_func(ea=int(xref[query.endpoint]))
+        except ValueError:
+            continue
+        if function.start_ea not in neighbours:
+            neighbours.append(function.start_ea)
+    return neighbours
 
 
 def _unvisited_neighbour_exists(frontier, seen, root_ea, max_depth) -> bool:

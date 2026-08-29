@@ -2,7 +2,7 @@
 
 import json
 
-from gepetto.ida.call_graph import collect_call_graph_context
+from gepetto.ida.call_graph import Direction, collect_call_graph_context
 from gepetto.ida.tools.tools import (
     add_result_to_messages,
     tool_error_payload,
@@ -12,7 +12,7 @@ from gepetto.ida.tools.tools import (
 
 def get_call_graph_context(
     ea=None,
-    direction="both",
+    direction: Direction = Direction.BOTH,
     max_depth=None,
     max_functions=None,
     max_chars_per_function=None,
@@ -40,7 +40,7 @@ def handle_get_call_graph_context_tc(tc, messages):
     try:
         result = get_call_graph_context(
             ea=args.get("ea"),
-            direction=args.get("direction", "both"),
+            direction=args.get("direction", Direction.BOTH),
             max_depth=args.get("max_depth"),
             max_functions=args.get("max_functions"),
             max_chars_per_function=args.get("max_chars_per_function"),
@@ -50,7 +50,7 @@ def handle_get_call_graph_context_tc(tc, messages):
         payload = tool_error_payload(
             str(exc),
             ea=args.get("ea"),
-            direction=args.get("direction", "both"),
+            direction=args.get("direction", Direction.BOTH),
         )
 
     add_result_to_messages(messages, tc, payload)
