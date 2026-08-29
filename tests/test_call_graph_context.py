@@ -28,7 +28,7 @@ def test_collect_call_graph_context_uses_breadth_first_order_within_the_budget(m
     monkeypatch.setattr(
         call_graph,
         "_decompiled_body",
-        lambda ea, _max_chars: (f"body_{ea:X}", False, "ok"),
+        lambda ea, _max_chars: call_graph.Body(f"body_{ea:X}", False, call_graph.BodyStatus.OK),
     )
 
     result = call_graph.collect_call_graph_context(
@@ -102,7 +102,7 @@ def test_collect_call_graph_context_skips_call_targets_outside_a_function(monkey
             ] if kwargs["subject"] == "0x100" else [],
         },
     )
-    monkeypatch.setattr(call_graph, "_decompiled_body", lambda ea, _max_chars: (f"body_{ea:X}", False, "ok"))
+    monkeypatch.setattr(call_graph, "_decompiled_body", lambda ea, _max_chars: call_graph.Body(f"body_{ea:X}", False, call_graph.BodyStatus.OK))
 
     result = call_graph.collect_call_graph_context(
         0x100,
@@ -138,7 +138,7 @@ def test_collect_call_graph_context_honors_an_explicit_body_budget(monkeypatch):
     monkeypatch.setattr(
         call_graph,
         "_decompiled_body",
-        lambda _ea, budget: (seen_budgets.append(budget) or f"body_budget_{budget}", False, "ok"),
+        lambda _ea, budget: call_graph.Body(seen_budgets.append(budget) or f"body_budget_{budget}", False, call_graph.BodyStatus.OK),
     )
 
     result = call_graph.collect_call_graph_context(0x100, max_chars_per_function=7)
@@ -151,7 +151,7 @@ def test_collect_call_graph_context_allows_a_zero_depth_budget(monkeypatch):
     monkeypatch.setattr(call_graph, "resolve_func", lambda ea: SimpleNamespace(start_ea=ea))
     monkeypatch.setattr(call_graph, "get_func_name", lambda function: f"function_{function.start_ea:X}")
     monkeypatch.setattr(call_graph, "_function_neighbours", lambda *_args: [0x200])
-    monkeypatch.setattr(call_graph, "_decompiled_body", lambda ea, _budget: (f"body_{ea:X}", False, "ok"))
+    monkeypatch.setattr(call_graph, "_decompiled_body", lambda ea, _budget: call_graph.Body(f"body_{ea:X}", False, call_graph.BodyStatus.OK))
 
     result = call_graph.collect_call_graph_context(
         0x100,
@@ -178,7 +178,7 @@ def _fake_graph(monkeypatch, graph, bodies=None):
                         lambda ea, direction: graph.get((ea, direction), []))
     if bodies is None:
         monkeypatch.setattr(call_graph, "_decompiled_body",
-                            lambda ea, _budget: (f"body_{ea:X}", False, "ok"))
+                            lambda ea, _budget: call_graph.Body(f"body_{ea:X}", False, call_graph.BodyStatus.OK))
 
 
 # --- every returned body is bounded, diagnostics included --------------------
@@ -289,7 +289,7 @@ def test_a_neighbour_reached_twice_is_decompiled_once(monkeypatch):
     }, bodies=True)
     monkeypatch.setattr(
         call_graph, "_decompiled_body",
-        lambda ea, _budget: (decompiled.append(ea) or f"body_{ea:X}", False, "ok"))
+        lambda ea, _budget: call_graph.Body(decompiled.append(ea) or f"body_{ea:X}", False, call_graph.BodyStatus.OK))
 
     call_graph.collect_call_graph_context(
         0x100, direction="both", max_depth=1, max_functions=8)
@@ -364,3 +364,74 @@ def test_an_already_seen_neighbour_is_not_counted_as_lost(monkeypatch):
         0x100, direction="callees", max_depth=3, max_functions=2)
 
     assert result["limits"]["budget_exhausted"] is False
+
+
+# --- the enums, and why they are string enums --------------------------------
+
+def test_a_status_renders_as_the_plain_string_everywhere():
+    """The reason StrEnum is backported rather than using (str, Enum).
+
+    A bare mixin serialises correctly but renders as `BodyStatus.OK` from
+    str() and f-strings, so the first log line or prompt that interpolates one
+    prints the wrong thing -- and nothing fails while it does.
+    """
+    status = call_graph.BodyStatus.OK
+
+    assert str(status) == "ok"
+    assert f"{status}" == "ok"
+    assert "{}".format(status) == "ok"
+    assert status == "ok", "still compares equal to the string it replaces"
+
+
+def test_a_status_survives_the_json_the_tool_sends():
+    """json.dumps refuses a bare Enum, and would refuse it in the tool path
+    only -- long after the collector's own tests had passed."""
+    import json
+
+    assert json.dumps({"status": call_graph.BodyStatus.FAILED}) == '{"status": "failed"}'
+
+
+def test_a_relation_is_a_string_enum_too():
+    assert str(call_graph.Relation.CALLER) == "caller"
+    assert call_graph.Relation.for_direction("callers") is call_graph.Relation.CALLER
+    assert call_graph.Relation.for_direction("callees") is call_graph.Relation.CALLEE
+
+
+def test_relations_serialise_as_a_plain_list_of_strings():
+    import json
+
+    relations = [call_graph.Relation.CALLEE, call_graph.Relation.CALLER]
+
+    assert json.dumps(relations) == '["callee", "caller"]'
+
+
+# --- the neighbour keeps its own invariants ----------------------------------
+
+def test_a_neighbour_reached_again_keeps_its_relations_unique_and_ordered():
+    body = call_graph.Body("code", False, call_graph.BodyStatus.OK)
+    neighbour = call_graph.Neighbour(
+        ea=0x200, name="f", depth=2, body=body,
+        relations=[call_graph.Relation.CALLER])
+
+    neighbour.also_reached_as(call_graph.Relation.CALLEE, 1)
+    neighbour.also_reached_as(call_graph.Relation.CALLEE, 3)
+
+    assert neighbour.relations == ["callee", "caller"], "unique and ordered"
+    assert neighbour.depth == 1, "the nearer depth wins, and later ones do not undo it"
+
+
+def test_a_neighbour_renders_the_payload_the_tool_sends():
+    body = call_graph.Body("int f;", True, call_graph.BodyStatus.OK)
+    neighbour = call_graph.Neighbour(
+        ea=0x200, name="f", depth=1, body=body,
+        relations=[call_graph.Relation.CALLEE])
+
+    assert neighbour.as_payload() == {
+        "ea": "0x200",
+        "name": "f",
+        "relations": ["callee"],
+        "depth": 1,
+        "code": "int f;",
+        "truncated": True,
+        "status": "ok",
+    }

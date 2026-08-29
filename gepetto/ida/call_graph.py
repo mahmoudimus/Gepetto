@@ -20,7 +20,25 @@ model and prompt shape.
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, NamedTuple
+
+try:  # 3.11+
+    from enum import StrEnum
+except ImportError:  # 3.10, which this project still supports
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        """What 3.11 added, for the version below it.
+
+        A bare ``(str, Enum)`` is not the same thing: it serialises correctly
+        but ``str()`` and f-strings render it as ``ClassName.MEMBER``, so the
+        first log line or prompt that interpolates one prints the wrong thing.
+        These two assignments are what StrEnum does about that.
+        """
+
+        __str__ = str.__str__
+        __format__ = str.__format__
 
 from gepetto.ida.tools.decompile_function import decompile_function
 from gepetto.ida.tools.get_xrefs import get_xrefs_unified
@@ -58,17 +76,61 @@ def _function_neighbours(func_ea: int, direction: str) -> list[int]:
     return neighbours
 
 
-def _truncate(text: str, max_chars: int) -> tuple[str, bool]:
+class BodyStatus(StrEnum):
+    """Whether a returned body is code, and if it is not, why not.
+
+    A string enum rather than a plain one: the tool payload goes through
+    json.dumps, which refuses a bare Enum -- and would refuse it in the tool
+    path only, long after the collector's own tests had passed.
+    """
+
+    OK = "ok"
+    FAILED = "failed"
+    EMPTY = "empty"
+
+
+class Relation(StrEnum):
+    """How a neighbour is attached to the root."""
+
+    CALLER = "caller"
+    CALLEE = "callee"
+
+    @classmethod
+    def for_direction(cls, direction: str) -> "Relation":
+        return cls.CALLER if direction == "callers" else cls.CALLEE
+
+
+class Truncated(NamedTuple):
+    """Text, and whether it had to be cut to fit."""
+
+    text: str
+    truncated: bool
+
+
+class Body(NamedTuple):
+    """A function body as it will be reported.
+
+    Named rather than a bare tuple because it grew: adding ``status`` to a
+    three-value tuple silently broke every caller that unpacked two, and the
+    next field would do it again.
+    """
+
+    text: str
+    truncated: bool
+    status: BodyStatus
+
+
+def _truncate(text: str, max_chars: int) -> Truncated:
     """Cut ``text`` to ``max_chars`` code points, marker included."""
     if len(text) <= max_chars:
-        return text, False
+        return Truncated(text, False)
     prefix_length = max_chars - len(_TRUNCATION_SUFFIX)
     if prefix_length <= 0:
-        return text[:max_chars], True
-    return text[:prefix_length] + _TRUNCATION_SUFFIX, True
+        return Truncated(text[:max_chars], True)
+    return Truncated(text[:prefix_length] + _TRUNCATION_SUFFIX, True)
 
 
-def _decompiled_body(func_ea: int, max_chars: int) -> tuple[str, bool, str]:
+def _decompiled_body(func_ea: int, max_chars: int) -> Body:
     """The body, bounded, and whether it is a body at all.
 
     Every path goes through :func:`_truncate`, including the diagnostics: the
@@ -83,13 +145,13 @@ def _decompiled_body(func_ea: int, max_chars: int) -> tuple[str, bool, str]:
     try:
         code = str(decompile_function(ea=func_ea))
     except Exception as exc:
-        text, truncated = _truncate(f"// decompilation failed: {exc}", max_chars)
-        return text, truncated, "failed"
+        cut = _truncate(f"// decompilation failed: {exc}", max_chars)
+        return Body(cut.text, cut.truncated, BodyStatus.FAILED)
     if not code.strip():
-        text, truncated = _truncate("// decompilation produced no output", max_chars)
-        return text, truncated, "empty"
-    text, truncated = _truncate(code, max_chars)
-    return text, truncated, "ok"
+        cut = _truncate("// decompilation produced no output", max_chars)
+        return Body(cut.text, cut.truncated, BodyStatus.EMPTY)
+    cut = _truncate(code, max_chars)
+    return Body(cut.text, cut.truncated, BodyStatus.OK)
 
 
 def _limit(value: int, name: str, minimum: int) -> int:
@@ -100,6 +162,41 @@ def _limit(value: int, name: str, minimum: int) -> int:
     if limit < minimum:
         raise ValueError(f"{name} must be at least {minimum}")
     return limit
+
+
+@dataclass
+class Neighbour:
+    """One function next to the root, and how it is next to it.
+
+    The merge below is why this is a class rather than a dict. Reaching the
+    same function from both directions has to keep the relations unique and
+    ordered and take the nearer depth, and those three rules were previously
+    three lines at the one call site that happened to need them -- which is
+    where invariants go to be forgotten.
+    """
+
+    ea: int
+    name: str
+    depth: int
+    body: Body
+    relations: list[Relation] = field(default_factory=list)
+
+    def also_reached_as(self, relation: Relation, depth: int) -> None:
+        """Record that the root reaches this function this way too."""
+        if relation not in self.relations:
+            self.relations = sorted(self.relations + [relation])
+        self.depth = min(self.depth, depth)
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "ea": hex(self.ea),
+            "name": self.name,
+            "relations": list(self.relations),
+            "depth": self.depth,
+            "code": self.body.text,
+            "truncated": self.body.truncated,
+            "status": self.body.status,
+        }
 
 
 def _unvisited_neighbour_exists(frontier, seen, root_ea, max_depth) -> bool:
@@ -134,7 +231,7 @@ def _walk(
     """
     directions = ["callers", "callees"] if direction == "both" else [direction]
     expanded = {current: {root_ea} for current in directions}
-    entries: dict[int, dict[str, Any]] = {}
+    entries: dict[int, Neighbour] = {}
     order: list[int] = []
     budget_exhausted = False
     frontier = [(root_ea, 0, current) for current in directions]
@@ -152,7 +249,7 @@ def _walk(
                 break
             if depth >= max_depth:
                 continue
-            relation = "caller" if current_direction == "callers" else "callee"
+            relation = Relation.for_direction(current_direction)
             for neighbour in _function_neighbours(ea, current_direction):
                 if neighbour == root_ea:
                     continue
@@ -160,10 +257,7 @@ def _walk(
                 if existing is not None:
                     # Free: no new entry, no budget spent, nothing decompiled
                     # twice. Just the fact that this one is reached both ways.
-                    if relation not in existing["relations"]:
-                        existing["relations"] = sorted(
-                            existing["relations"] + [relation])
-                    existing["depth"] = min(existing["depth"], depth + 1)
+                    existing.also_reached_as(relation, depth + 1)
                 else:
                     if len(order) >= max_functions:
                         # Reachable evidence we had no room for, which is what
@@ -171,17 +265,13 @@ def _walk(
                         budget_exhausted = True
                         break
                     function = resolve_func(ea=neighbour)
-                    code, truncated, status = _decompiled_body(
-                        neighbour, max_chars_per_function)
-                    entries[neighbour] = {
-                        "ea": hex(neighbour),
-                        "name": get_func_name(function) or f"sub_{neighbour:X}",
-                        "relations": [relation],
-                        "depth": depth + 1,
-                        "code": code,
-                        "truncated": truncated,
-                        "status": status,
-                    }
+                    entries[neighbour] = Neighbour(
+                        ea=neighbour,
+                        name=get_func_name(function) or f"sub_{neighbour:X}",
+                        depth=depth + 1,
+                        body=_decompiled_body(neighbour, max_chars_per_function),
+                        relations=[relation],
+                    )
                     order.append(neighbour)
                 if neighbour not in expanded[current_direction]:
                     expanded[current_direction].add(neighbour)
@@ -195,7 +285,7 @@ def _walk(
         budget_exhausted = _unvisited_neighbour_exists(
             unexplored + frontier, set(entries), root_ea, max_depth)
 
-    return [entries[ea] for ea in order], budget_exhausted
+    return [entries[ea].as_payload() for ea in order], budget_exhausted
 
 
 def collect_call_graph_context(
@@ -221,8 +311,7 @@ def collect_call_graph_context(
     root_ea = parse_ea(ea) if ea is not None else safe_get_screen_ea()
     root_function = resolve_func(ea=root_ea)
     root_ea = root_function.start_ea
-    root_code, root_truncated, root_status = _decompiled_body(
-        root_ea, max_chars_per_function)
+    root = _decompiled_body(root_ea, max_chars_per_function)
     neighbours, budget_exhausted = _walk(
         root_ea,
         direction,
@@ -235,9 +324,9 @@ def collect_call_graph_context(
         "root": {
             "ea": hex(root_ea),
             "name": get_func_name(root_function) or f"sub_{root_ea:X}",
-            "code": root_code,
-            "truncated": root_truncated,
-            "status": root_status,
+            "code": root.text,
+            "truncated": root.truncated,
+            "status": root.status,
         },
         "neighbours": neighbours,
         "limits": {
@@ -252,4 +341,4 @@ def collect_call_graph_context(
     }
 
 
-__all__ = ["collect_call_graph_context"]
+__all__ = ["BodyStatus", "collect_call_graph_context"]
