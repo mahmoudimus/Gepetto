@@ -89,15 +89,50 @@ class BodyStatus(StrEnum):
     EMPTY = "empty"
 
 
+class Direction(StrEnum):
+    """Which way to walk. Plural, because it names a set of edges."""
+
+    CALLERS = "callers"
+    CALLEES = "callees"
+    BOTH = "both"
+
+    @classmethod
+    def parse(cls, value: str) -> "Direction":
+        try:
+            return cls(value)
+        except ValueError:
+            raise ValueError(
+                f"direction must be callers, callees or both (got {value!r})"
+            ) from None
+
+
 class Relation(StrEnum):
-    """How a neighbour is attached to the root."""
+    """How one neighbour is attached to the root. Singular."""
 
     CALLER = "caller"
     CALLEE = "callee"
 
     @classmethod
-    def for_direction(cls, direction: str) -> "Relation":
-        return cls.CALLER if direction == "callers" else cls.CALLEE
+    def for_direction(cls, direction: "Direction") -> "Relation":
+        """The relation a neighbour has when reached walking this way.
+
+        A mapping rather than a conditional, because the conditional had an
+        else: anything that was not "callers" came back as CALLEE, so a typo,
+        an empty string and None all produced a confident wrong answer. BOTH
+        is the case that makes it a real question -- it names two relations,
+        so asking it for one is a mistake worth hearing about.
+        """
+        try:
+            return _RELATION_FOR_DIRECTION[Direction.parse(direction)]
+        except KeyError:
+            raise ValueError(
+                f"{direction!r} names two relations, not one") from None
+
+
+_RELATION_FOR_DIRECTION = {
+    Direction.CALLERS: Relation.CALLER,
+    Direction.CALLEES: Relation.CALLEE,
+}
 
 
 class Truncated(NamedTuple):
@@ -229,7 +264,8 @@ def _walk(
     relations rather than two entries, which costs one decompilation instead of
     two and says the more useful thing: that the two functions call each other.
     """
-    directions = ["callers", "callees"] if direction == "both" else [direction]
+    directions = ([Direction.CALLERS, Direction.CALLEES]
+                  if direction is Direction.BOTH else [direction])
     expanded = {current: {root_ea} for current in directions}
     entries: dict[int, Neighbour] = {}
     order: list[int] = []
@@ -301,8 +337,7 @@ def collect_call_graph_context(
     The returned root and each neighbour include a decompiled body.  This is a
     library API: callers own policy such as configuration and prompt budgets.
     """
-    if direction not in {"callers", "callees", "both"}:
-        raise ValueError(f"direction must be callers, callees or both (got {direction!r})")
+    direction = Direction.parse(direction)
 
     max_depth = _limit(max_depth, "max_depth", 0)
     max_functions = _limit(max_functions, "max_functions", 0)

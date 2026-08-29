@@ -435,3 +435,32 @@ def test_a_neighbour_renders_the_payload_the_tool_sends():
         "truncated": True,
         "status": "ok",
     }
+
+
+def test_a_direction_is_named_rather_than_spelled_out():
+    assert call_graph.Direction.parse("both") is call_graph.Direction.BOTH
+    assert call_graph.Direction.BOTH == "both", "still the string it serialises as"
+
+
+def test_an_unknown_direction_is_refused_with_the_same_message():
+    import pytest
+
+    with pytest.raises(ValueError, match="must be callers, callees or both"):
+        call_graph.Direction.parse("sideways")
+
+
+def test_a_relation_is_never_guessed_from_an_unknown_direction():
+    """The conditional this replaced had an else, so a typo, an empty string
+    and None all came back CALLEE -- a confident wrong answer."""
+    import pytest
+
+    for bad in ("sideways", "", None, "caller"):
+        with pytest.raises(ValueError):
+            call_graph.Relation.for_direction(bad)
+
+
+def test_both_names_two_relations_so_asking_for_one_is_an_error():
+    import pytest
+
+    with pytest.raises(ValueError, match="two relations"):
+        call_graph.Relation.for_direction(call_graph.Direction.BOTH)
