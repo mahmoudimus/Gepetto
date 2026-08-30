@@ -10,14 +10,18 @@ window to parent a dialog to, and reading an enum whose scoping changed
 between Qt5 and Qt6.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-# Any, not None: these become modules once a binding is adopted, and the
-# widgets below subclass out of them. A checker told they are None cannot
-# see a base class at all.
-QtCore: Any = None
-QtGui: Any = None
-QtWidgets: Any = None
+if TYPE_CHECKING:
+    # Named here only so a type checker has modules to resolve names like
+    # QtWidgets.QWidget against, in annotations and in base classes. Nothing
+    # imports PySide6 at runtime on this path: which binding is used, and
+    # whether one is used at all, is decided below.
+    from PySide6 import QtCore, QtGui, QtWidgets
+else:
+    QtCore = None
+    QtGui = None
+    QtWidgets = None
 
 binding = None
 QT_VERSION = None

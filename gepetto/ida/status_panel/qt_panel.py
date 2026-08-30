@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 
 import ida_kernwin
-from gepetto.ida.status_panel.qt_compat import QtCore, QtGui, QtWidgets, exec_menu
+from gepetto.ida.qt import QtCore, QtGui, QtWidgets
 
 from gepetto.ida.utils.hooks import run_when_desktop_ready
 from gepetto.ida.status_panel.panel_interface import StatusPanel, LogCategory, LogLevel
@@ -593,7 +593,7 @@ class GepettoStatusForm(ida_kernwin.PluginForm):
             error_action.setEnabled(False)
 
         pos = self._model_button.mapToGlobal(QtCore.QPoint(0, 0))
-        exec_menu(menu, pos)
+        menu.exec_(pos)
 
     # ------------------------------------------------------------------
     def _switch_model(self, model_name: str) -> None:

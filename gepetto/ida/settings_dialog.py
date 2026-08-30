@@ -15,18 +15,17 @@ Importing it requires Qt. Callers check gepetto.ida.qt.available() first.
 
 import gepetto.config
 from gepetto.ida import qt
+from gepetto.ida.qt import QtCore, QtWidgets
 from gepetto.ida.settings import NON_PROVIDER_SECTIONS, collect_changes
 from gepetto.ida.settings_widgets import editor_for
 
-QtCore = qt.QtCore
-QtWidgets = qt.QtWidgets
 
 _ = gepetto.config._
 
 DRAWER_MS = 160
 
 
-class Drawer(QtWidgets.QWidget):  # type: ignore[name-defined]  # base class comes from the binding chosen at runtime
+class Drawer(QtWidgets.QWidget):
     """A panel that slides open under the thing that chose it.
 
     One page per provider, all built up front. Building them lazily would
@@ -63,7 +62,7 @@ class Drawer(QtWidgets.QWidget):  # type: ignore[name-defined]  # base class com
         self._animation.start()
 
 
-class SettingsDialog(QtWidgets.QDialog):  # type: ignore[name-defined]  # base class comes from the binding chosen at runtime
+class SettingsDialog(QtWidgets.QDialog):
     def __init__(self, groups, values, config_path=None, active_section=None,
                  parent=None):
         super().__init__(parent)

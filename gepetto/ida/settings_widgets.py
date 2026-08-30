@@ -18,10 +18,8 @@ import json
 
 import gepetto.config
 from gepetto.ida import qt
+from gepetto.ida.qt import QtCore, QtGui, QtWidgets
 
-QtCore = qt.QtCore
-QtGui = qt.QtGui
-QtWidgets = qt.QtWidgets
 
 _ = gepetto.config._
 
@@ -64,7 +62,7 @@ def warning_palette(widget):
 _UNSET_POSITION = -1
 
 
-class _Editor(QtWidgets.QWidget):  # type: ignore[name-defined]  # base class comes from the binding chosen at runtime
+class _Editor(QtWidgets.QWidget):
     """An editor and the button that empties it."""
 
     def __init__(self, setting, parent=None):
@@ -275,7 +273,7 @@ def _summary(value):
     return "[ %d ]" % len(value)
 
 
-class JsonTree(QtWidgets.QTreeWidget):  # type: ignore[name-defined]  # base class comes from the binding chosen at runtime
+class JsonTree(QtWidgets.QTreeWidget):
     """JSON as rows, for the half of editing that is not typing.
 
     Qt has JSON parsing and it has tree widgets, but nothing that joins them,

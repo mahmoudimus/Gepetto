@@ -142,7 +142,7 @@ def provider_sections():
     and the one you most need to reach in a settings dialog is the one that
     is not yet.
     """
-    sections = set()
+    sections: set[str] = set()
     parsed = gepetto.config.parsed_ini
     if parsed is not None:
         sections.update(
