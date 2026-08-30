@@ -461,3 +461,34 @@ class GeneratePythonCodeHandler(idaapi.action_handler_t):
 
     def update(self, ctx):
         return idaapi.AST_ENABLE_ALWAYS
+
+
+class SettingsHandler(idaapi.action_handler_t):
+    """Edit the configuration without closing IDA to find the file."""
+
+    def __init__(self):
+        idaapi.action_handler_t.__init__(self)
+
+    def activate(self, ctx):
+        from gepetto.ida.settings_form import show_settings
+
+        summary = show_settings()
+        if summary is None:
+            return 1
+        print(summary)
+        STATUS_PANEL.log(summary, category=LogCategory.SYSTEM)
+
+        # A changed key or base URL only reaches the provider through a new
+        # client, so rebuild the model rather than leaving the user to wonder
+        # why the setting they just saved made no difference.
+        try:
+            gepetto.config.model = instantiate_model(str(gepetto.config.model))
+            STATUS_PANEL.set_model(str(gepetto.config.model))
+        except Exception as e:
+            message = _("Settings saved, but reloading the model failed: {error}").format(error=str(e))
+            print(message)
+            STATUS_PANEL.log(message, category=LogCategory.SYSTEM, level=LogLevel.WARNING)
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS

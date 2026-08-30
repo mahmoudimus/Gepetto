@@ -13,6 +13,7 @@ from gepetto.ida.handlers import (
     GenerateCCodeHandler,
     GeneratePythonCodeHandler,
     RenameHandler,
+    SettingsHandler,
     SwapModelHandler,
 )
 from gepetto.ida.comment_handler import CommentHandler
@@ -63,6 +64,7 @@ class GepettoPlugin(idaapi.plugin_t):
     c_code_menu_path = "Edit/Gepetto/" + _("Generate C Code")
     python_code_action_name = "gepetto:generate_python_code"
     python_code_menu_path = "Edit/Gepetto/" + _("Generate Python Code")
+    settings_action_name = "gepetto:settings"
     auto_show_action_name = "gepetto:toggle_status_panel_auto_show"
     wanted_name = 'Gepetto'
     wanted_hotkey = ''
@@ -163,6 +165,20 @@ class GepettoPlugin(idaapi.plugin_t):
         register_cli()
 
         options_menu = "Edit/Gepetto/" + _("Options")
+
+        # Under Options, beside the one toggle that was already there.
+        settings_action = idaapi.action_desc_t(
+            self.settings_action_name,
+            _("Settings..."),
+            SettingsHandler(),
+            "",
+            _("Edit Gepetto's configuration"),
+            156)
+        idaapi.register_action(settings_action)
+        self.settings_menu_path = f"{options_menu}/" + _("Settings...")
+        idaapi.attach_action_to_menu(self.settings_menu_path, self.settings_action_name,
+                                     idaapi.SETMENU_APP)
+
         toggle_label = _("Auto-open status panel")
         self.auto_show_menu_path = f"{options_menu}/{toggle_label}"
         self._register_auto_show_action()
@@ -297,6 +313,22 @@ class GepettoPlugin(idaapi.plugin_t):
         self._register_auto_show_action(force_state=force_state)
 
     # -----------------------------------------------------------------------------
+    def _unregister_settings_action(self):
+        if not hasattr(self, "settings_menu_path"):
+            return
+        _safe_execute_sync(
+            functools.partial(
+                idaapi.detach_action_from_menu,
+                self.settings_menu_path,
+                self.settings_action_name,
+            )
+        )
+        _safe_execute_sync(
+            functools.partial(idaapi.unregister_action, self.settings_action_name)
+        )
+
+    # -----------------------------------------------------------------------------
+
     def _unregister_auto_show_action(self):
         if not hasattr(self, "auto_show_menu_path"):
             return
@@ -323,6 +355,7 @@ class GepettoPlugin(idaapi.plugin_t):
         self.detach_actions()
         if self.menu:
             self.menu.unhook()
+        self._unregister_settings_action()
         self._unregister_auto_show_action()
         get_status_panel().close()
         PLUGIN_INSTANCE = None
