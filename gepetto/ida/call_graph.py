@@ -377,6 +377,20 @@ class Neighbour:
             self.relations = sorted(self.relations + [relation])
         self.depth = min(self.depth, depth)
 
+    @property
+    def relation(self) -> str:
+        """How the root reaches this function, as one phrase.
+
+        A neighbour reached from both directions carries both relations, so
+        "caller, callee" is a fact about the pair worth saying.
+        """
+        return ", ".join(self.relations) if self.relations else "neighbour"
+
+    @property
+    def label(self) -> str:
+        """How this neighbour introduces itself as evidence."""
+        return f"[{self.relation}, depth {self.depth}] {self.name} ({hex(self.ea)})"
+
     def as_payload(self) -> NeighbourPayload:
         return {
             "ea": hex(self.ea),
@@ -386,6 +400,66 @@ class Neighbour:
             "code": self.body.text,
             "truncated": self.body.truncated,
             "status": self.body.status,
+        }
+
+
+@dataclass
+class Root:
+    """The function asked about. It has no relation to itself, and no depth."""
+
+    ea: int
+    name: str
+    body: Body
+
+    def as_payload(self) -> RootPayload:
+        return {
+            "ea": hex(self.ea),
+            "name": self.name,
+            "code": self.body.text,
+            "truncated": self.body.truncated,
+            "status": self.body.status,
+        }
+
+
+@dataclass
+class Limits:
+    """What was asked for, and whether it was enough."""
+
+    direction: Direction
+    max_depth: int
+    max_functions: int
+    returned: int
+    budget_exhausted: bool
+
+    def as_payload(self) -> LimitsPayload:
+        return {
+            "direction": self.direction,
+            "max_depth": self.max_depth,
+            "max_functions": self.max_functions,
+            "returned": self.returned,
+            "budget_exhausted": self.budget_exhausted,
+        }
+
+
+@dataclass
+class CallGraphSlice:
+    """A bounded neighbourhood of one function, as objects.
+
+    :func:`collect_call_graph_context` is this flattened for a JSON tool call.
+    A caller inside the process should ask for the slice instead: reading the
+    payload by key is how ``relation`` became ``relations`` unnoticed, and a
+    neighbour knows how to introduce itself without being taken apart first.
+    """
+
+    root: Root
+    neighbours: list[Neighbour]
+    limits: Limits
+
+    def as_payload(self) -> CallGraphContext:
+        return {
+            "root": self.root.as_payload(),
+            "neighbours": [n.as_payload() for n in self.neighbours],
+            "limits": self.limits.as_payload(),
         }
 
 
@@ -431,7 +505,7 @@ def _walk(
     max_depth: int,
     max_functions: int,
     max_chars_per_function: int,
-) -> tuple[list[NeighbourPayload], bool]:
+) -> tuple[list[Neighbour], bool]:
     """Breadth-first neighbourhood of ``root_ea``, excluding the root.
 
     Traversal state is kept per direction.  A single shared set collapses the
@@ -511,21 +585,25 @@ def _walk(
         budget_exhausted = _unvisited_neighbour_exists(
             unexplored + frontier, set(entries), root_ea, max_depth)
 
-    return [entries[ea].as_payload() for ea in order], budget_exhausted
+    return [entries[ea] for ea in order], budget_exhausted
 
 
-def collect_call_graph_context(
+def collect_call_graph_slice(
     ea: int | str | None = None,
     *,
     direction: Direction | str = Direction.BOTH,
     max_depth: int = DEFAULT_MAX_DEPTH,
     max_functions: int = DEFAULT_MAX_FUNCTIONS,
     max_chars_per_function: int = DEFAULT_MAX_CHARS_PER_FUNCTION,
-) -> CallGraphContext:
+) -> CallGraphSlice:
     """Return a bounded breadth-first call-graph slice around a function.
 
-    The returned root and each neighbour include a decompiled body.  This is a
-    library API: callers own policy such as configuration and prompt budgets.
+    The root and each neighbour carry a decompiled body.  This is a library
+    API: callers own policy such as configuration and prompt budgets.
+
+    In-process callers want this rather than
+    :func:`collect_call_graph_context`, which flattens it for a JSON tool
+    call and loses the behaviour with the keys.
     """
     wanted = Direction.parse(direction)
 
@@ -537,7 +615,9 @@ def collect_call_graph_context(
     root_function = resolve_func(ea=root_ea)
     root_ea = root_function.start_ea
     root_name = get_func_name(root_function) or f"sub_{root_ea:X}"
-    root = _decompiled_body(root_ea, max_chars_per_function)
+    # Before the walk, so the root is decompiled first: an inlined call in the
+    # constructor below would quietly reorder the decompiler's work.
+    root_body = _decompiled_body(root_ea, max_chars_per_function)
     neighbours, budget_exhausted = _walk(
         root_ea,
         root_name,
@@ -547,26 +627,39 @@ def collect_call_graph_context(
         max_chars_per_function,
     )
 
-    return {
-        "root": {
-            "ea": hex(root_ea),
-            "name": root_name,
-            "code": root.text,
-            "truncated": root.truncated,
-            "status": root.status,
-        },
-        "neighbours": neighbours,
-        "limits": {
-            "direction": wanted,
-            "max_depth": max_depth,
-            "max_functions": max_functions,
-            "returned": len(neighbours),
+    return CallGraphSlice(
+        root=Root(ea=root_ea, name=root_name, body=root_body),
+        neighbours=neighbours,
+        limits=Limits(
+            direction=wanted,
+            max_depth=max_depth,
+            max_functions=max_functions,
+            returned=len(neighbours),
             # Reachable evidence was left out -- not merely that the budget
             # happened to fill exactly.
-            "budget_exhausted": budget_exhausted,
-        },
-    }
+            budget_exhausted=budget_exhausted,
+        ),
+    )
 
 
-__all__ = ["BodyStatus", "CallGraphContext", "NeighbourPayload",
-           "collect_call_graph_context"]
+def collect_call_graph_context(
+    ea: int | str | None = None,
+    *,
+    direction: Direction | str = Direction.BOTH,
+    max_depth: int = DEFAULT_MAX_DEPTH,
+    max_functions: int = DEFAULT_MAX_FUNCTIONS,
+    max_chars_per_function: int = DEFAULT_MAX_CHARS_PER_FUNCTION,
+) -> CallGraphContext:
+    """The same slice, flattened for a JSON tool call."""
+    return collect_call_graph_slice(
+        ea,
+        direction=direction,
+        max_depth=max_depth,
+        max_functions=max_functions,
+        max_chars_per_function=max_chars_per_function,
+    ).as_payload()
+
+
+__all__ = ["BodyStatus", "CallGraphContext", "CallGraphSlice",
+           "NeighbourPayload", "collect_call_graph_context",
+           "collect_call_graph_slice"]

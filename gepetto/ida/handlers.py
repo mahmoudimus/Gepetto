@@ -8,8 +8,8 @@ import ida_hexrays  # type: ignore
 import idc  # type: ignore
 
 import gepetto.config
-from gepetto.ida.call_graph import (CallGraphContext, Direction,
-                                    collect_call_graph_context)
+from gepetto.ida.call_graph import (CallGraphSlice, Direction,
+                                    collect_call_graph_slice)
 from gepetto.ida.utils.thread_helpers import *
 from gepetto.models.model_manager import instantiate_model
 from gepetto.ida.status_panel.panel_interface import LogCategory, LogLevel
@@ -20,36 +20,22 @@ _ = gepetto.config._
 STATUS_PANEL = get_status_panel()
 
 
-def _format_explain_call_graph_context(context: CallGraphContext) -> str:
+def _format_explain_call_graph_context(context: CallGraphSlice) -> str:
     """Render a call-graph slice as prompt evidence.
 
-    Every key is read directly rather than with a default. A default turns a
-    key this module and the collector disagree about into a plausible-looking
-    prompt, which is how `relation` becoming `relations` went unnoticed; a
-    KeyError reaches the caller below, which reports it and carries on.
+    The slice is asked for as objects rather than as the tool payload, so a
+    neighbour introduces itself and this only decides prompt policy: the
+    framing, the fences, and the order.
     """
-    neighbours = context["neighbours"]
-    if not neighbours:
+    if not context.neighbours:
         return ""
 
     lines = [
         "\nBounded call-graph evidence from observed neighbouring code:",
         "Use these bodies as evidence of relationships and behavior; separate direct observations from inference.",
     ]
-    for neighbour in neighbours:
-        # A neighbour reached from both directions carries both relations, so
-        # "caller, callee" is a fact about the pair worth putting in the prompt.
-        relations = neighbour["relations"]
-        relation = ", ".join(relations) if relations else "neighbour"
-        lines.extend(
-            [
-                f"\n[{relation}, depth {neighbour['depth']}] "
-                f"{neighbour['name']} ({neighbour['ea']})",
-                "```C",
-                str(neighbour["code"]),
-                "```",
-            ]
-        )
+    for neighbour in context.neighbours:
+        lines.extend([f"\n{neighbour.label}", "```C", neighbour.body.text, "```"])
     return "\n".join(lines) + "\n"
 
 
@@ -61,7 +47,7 @@ def _collect_explain_call_graph_context(ea: int) -> str:
     action itself down.
     """
     try:
-        context = collect_call_graph_context(
+        context = collect_call_graph_slice(
             ea,
             direction=Direction.BOTH,
             max_depth=1,

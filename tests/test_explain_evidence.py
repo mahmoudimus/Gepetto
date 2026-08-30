@@ -1,6 +1,24 @@
 from gepetto.ida import handlers
 from types import SimpleNamespace
 
+from gepetto.ida.call_graph import (Body, BodyStatus, CallGraphSlice, Direction,
+                                    Limits, Neighbour, Root)
+
+
+def _neighbour(ea, name, relations, depth=1, code="x"):
+    """A real Neighbour, so these tests cannot drift from the producer."""
+    return Neighbour(ea=ea, name=name, depth=depth,
+                     body=Body(code, False, BodyStatus.OK),
+                     relations=list(relations))
+
+
+def _slice(*neighbours):
+    return CallGraphSlice(
+        root=Root(0x100, "root", Body("int root(void);", False, BodyStatus.OK)),
+        neighbours=list(neighbours),
+        limits=Limits(Direction.BOTH, 1, 4, len(neighbours), False),
+    )
+
 
 def test_explain_evidence_uses_a_bounded_call_graph_slice(monkeypatch):
     seen = {}
@@ -8,20 +26,10 @@ def test_explain_evidence_uses_a_bounded_call_graph_slice(monkeypatch):
     def collect(ea, **limits):
         seen["ea"] = ea
         seen["limits"] = limits
-        return {
-            "neighbours": [
-                {
-                    "ea": "0x200",
-                    "name": "caller_name",
-                    "relations": ["caller"],
-                    "depth": 1,
-                    "code": "deadline = get_time_ns();",
-                    "truncated": False,
-                }
-            ]
-        }
+        return _slice(_neighbour(0x200, "caller_name", ["caller"],
+                                 code="deadline = get_time_ns();"))
 
-    monkeypatch.setattr(handlers, "collect_call_graph_context", collect, raising=False)
+    monkeypatch.setattr(handlers, "collect_call_graph_slice", collect)
 
     evidence = handlers._collect_explain_call_graph_context(0x100)
 
@@ -43,7 +51,9 @@ def test_explain_evidence_is_optional_when_collection_fails(monkeypatch, capsys)
     def collect(*_args, **_kwargs):
         raise RuntimeError("no decompiler")
 
-    monkeypatch.setattr(handlers, "collect_call_graph_context", collect, raising=False)
+    # No raising=False: patching a name this module does not have is how a
+    # rename goes unnoticed, and this test then exercises the real collector.
+    monkeypatch.setattr(handlers, "collect_call_graph_slice", collect)
 
     assert handlers._collect_explain_call_graph_context(0x100) == ""
     assert "call-graph evidence unavailable" in capsys.readouterr().out
@@ -79,15 +89,9 @@ def test_a_neighbour_reached_both_ways_says_so_in_the_prompt():
     prompt should carry both rather than picking one."""
     from gepetto.ida.handlers import _format_explain_call_graph_context
 
-    text = _format_explain_call_graph_context({
-        "neighbours": [{
-            "relations": ["callee", "caller"],
-            "name": "helper",
-            "ea": "0x140001000",
-            "depth": 1,
-            "code": "int helper(void);",
-        }]
-    })
+    text = _format_explain_call_graph_context(
+        _slice(_neighbour(0x140001000, "helper", ["callee", "caller"],
+                          code="int helper(void);")))
 
     assert "[callee, caller, depth 1] helper (0x140001000)" in text
 
@@ -95,10 +99,8 @@ def test_a_neighbour_reached_both_ways_says_so_in_the_prompt():
 def test_a_neighbour_with_no_relations_is_still_rendered():
     from gepetto.ida.handlers import _format_explain_call_graph_context
 
-    text = _format_explain_call_graph_context({
-        "neighbours": [{"relations": [], "name": "helper", "ea": "0x1",
-                        "depth": 1, "code": "x"}]
-    })
+    text = _format_explain_call_graph_context(
+        _slice(_neighbour(0x1, "helper", [])))
 
     assert "[neighbour, depth 1] helper (0x1)" in text
 
@@ -132,11 +134,11 @@ def test_the_formatter_reads_what_the_collector_actually_produces(monkeypatch):
                         lambda ea, _budget, _anchor=None: call_graph.Body(
                             f"body_{ea:X}", False, call_graph.BodyStatus.OK))
 
-    context = call_graph.collect_call_graph_context(
+    context = call_graph.collect_call_graph_slice(
         0x100, direction="both", max_depth=1, max_functions=8)
     text = _format_explain_call_graph_context(context)
 
     # 0x200 is reached both ways; 0x300 only as a callee.
     assert "[callee, caller, depth 1] function_200 (0x200)" in text
     assert "[callee, depth 1] function_300 (0x300)" in text
-    assert "[neighbour," not in text, "a placeholder means the keys disagree"
+    assert "[neighbour," not in text, "a placeholder means no relation arrived"
