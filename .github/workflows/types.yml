@@ -1,0 +1,45 @@
+# The test suite cannot run here. It imports `idapro`, which needs a licensed
+# IDA Pro, so pytest stays a local and Docker check.
+#
+# mypy can run, because `ignore_missing_imports` means it never imports IDA's
+# modules at all -- which makes this the one check that can look at every pull
+# request automatically.
+#
+# It is deliberately narrow. `[tool.mypy]` in pyproject.toml lists the modules
+# that are clean; the rest of the package still reports 49 errors, and gating
+# this on that cleanup would have meant checking nothing. Modules join the list
+# as they are made clean, so this job stays green and stays meaningful.
+
+name: types
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: types-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mypy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # The floor in pyproject.toml's requires-python, and what
+          # [tool.mypy] python_version targets.
+          python-version: "3.10"
+
+      # Upper bound so a future major release cannot turn an unrelated pull
+      # request red. Verified clean on 1.11.2, 1.18.2 and 2.3.1.
+      - run: pip install "mypy>=1.11,<3"
+
+      # No arguments: the files and settings come from pyproject.toml, so this
+      # cannot drift from what a contributor runs locally.
+      - run: mypy

@@ -15,4 +15,23 @@ dependencies = [
 [dependency-groups]
 dev = [
     "idapro>=0.0.6",
+    "mypy>=1.11",
+]
+
+[tool.mypy]
+python_version = "3.10"
+
+# IDA's modules (ida_*, idaapi, idc) ship no stubs, and neither do several of
+# the provider SDKs. Without this, every import is an error and the real ones
+# drown in them.
+ignore_missing_imports = true
+
+# Check the listed files, not everything they import. The rest of the package
+# reports 49 errors today; gating this on that cleanup would mean checking
+# nothing at all. Add modules here as they are made clean.
+follow_imports = "silent"
+files = [
+    "gepetto/ida/call_graph.py",
+    "gepetto/ida/handlers.py",
+    "gepetto/ida/tools/get_call_graph_context.py",
 ]
