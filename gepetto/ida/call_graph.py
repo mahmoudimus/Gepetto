@@ -20,15 +20,17 @@ model and prompt shape.
 
 from __future__ import annotations
 
+import sys
+
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
-try:  # 3.11+
+if sys.version_info >= (3, 11):
     from enum import StrEnum
-except ImportError:  # 3.10, which this project still supports
+else:  # 3.10, which this project still supports
     from enum import Enum
 
-    class StrEnum(str, Enum):
+    class StrEnum(str, Enum):  # type: ignore[no-redef]
         """What 3.11 added, for the version below it.
 
         A bare ``(str, Enum)`` is not the same thing: it serialises correctly
@@ -38,7 +40,7 @@ except ImportError:  # 3.10, which this project still supports
         """
 
         __str__ = str.__str__
-        __format__ = str.__format__
+        __format__ = str.__format__  # type: ignore[assignment]
 
 from gepetto.ida.tools.decompile_function import decompile_function
 from gepetto.ida.tools.get_xrefs import get_xrefs_unified
@@ -265,20 +267,9 @@ def _function_neighbours(func_ea: int, direction: Direction) -> list[int]:
     return neighbours
 
 
-def _unvisited_neighbour_exists(frontier, seen, root_ea, max_depth) -> bool:
-    """Whether anything reachable was left out. Enumerates xrefs, decompiles nothing."""
-    for ea, depth, current_direction in frontier:
-        if depth >= max_depth:
-            continue
-        for neighbour in _function_neighbours(ea, current_direction):
-            if neighbour != root_ea and neighbour not in seen:
-                return True
-    return False
-
-
 def _walk(
     root_ea: int,
-    direction: str,
+    direction: Direction,
     max_depth: int,
     max_functions: int,
     max_chars_per_function: int,
@@ -303,17 +294,11 @@ def _walk(
     budget_exhausted = False
     frontier = [(root_ea, 0, current) for current in directions]
 
-    # Frontier entries abandoned when the budget filled. They were never
-    # enumerated, so whether they held anything is a question to answer rather
-    # than assume -- in either direction.
-    unexplored: list[tuple[int, int, str]] = []
-
-    while frontier and len(order) < max_functions:
-        next_frontier: list[tuple[int, int, str]] = []
-        for position, (ea, depth, current_direction) in enumerate(frontier):
-            if len(order) >= max_functions:
-                unexplored.extend(frontier[position:])
-                break
+    # Finish the bounded walk through admitted functions even after all slots
+    # are used: another relation on an existing entry costs no new function.
+    while frontier:
+        next_frontier: list[tuple[int, int, Direction]] = []
+        for ea, depth, current_direction in frontier:
             if depth >= max_depth:
                 continue
             relation = Relation.for_direction(current_direction)
@@ -330,7 +315,7 @@ def _walk(
                         # Reachable evidence we had no room for, which is what
                         # a truncated traversal means.
                         budget_exhausted = True
-                        break
+                        continue
                     function = resolve_func(ea=neighbour)
                     entries[neighbour] = Neighbour(
                         ea=neighbour,
@@ -344,13 +329,6 @@ def _walk(
                     expanded[current_direction].add(neighbour)
                     next_frontier.append((neighbour, depth + 1, current_direction))
         frontier = next_frontier
-
-    if not budget_exhausted and len(order) >= max_functions:
-        # Nothing was refused on the way, so the budget filled exactly. Whether
-        # the nodes it stopped short of held anything is still a question, and
-        # answering it is cheaper than being wrong about it.
-        budget_exhausted = _unvisited_neighbour_exists(
-            unexplored + frontier, set(entries), root_ea, max_depth)
 
     return [entries[ea].as_payload() for ea in order], budget_exhausted
 
@@ -368,19 +346,25 @@ def collect_call_graph_context(
     The returned root and each neighbour include a decompiled body.  This is a
     library API: callers own policy such as configuration and prompt budgets.
     """
-    direction = Direction.parse(direction)
+    wanted = Direction.parse(direction)
 
     max_depth = _limit(max_depth, "max_depth", 0)
     max_functions = _limit(max_functions, "max_functions", 0)
     max_chars_per_function = _limit(max_chars_per_function, "max_chars_per_function", 1)
 
-    root_ea = parse_ea(ea) if ea is not None else safe_get_screen_ea()
-    root_function = resolve_func(ea=root_ea)
+    try:
+        root_ea = parse_ea(ea) if ea is not None else safe_get_screen_ea()
+    except ValueError:
+        if not isinstance(ea, str) or not ea.strip():
+            raise
+        root_function = resolve_func(name=ea.strip())
+    else:
+        root_function = resolve_func(ea=root_ea)
     root_ea = root_function.start_ea
     root = _decompiled_body(root_ea, max_chars_per_function)
     neighbours, budget_exhausted = _walk(
         root_ea,
-        direction,
+        wanted,
         max_depth,
         max_functions,
         max_chars_per_function,
@@ -396,7 +380,7 @@ def collect_call_graph_context(
         },
         "neighbours": neighbours,
         "limits": {
-            "direction": direction,
+            "direction": wanted,
             "max_depth": max_depth,
             "max_functions": max_functions,
             "returned": len(neighbours),

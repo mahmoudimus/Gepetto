@@ -1,3 +1,4 @@
+import pytest
 from types import SimpleNamespace
 
 from gepetto.ida import call_graph
@@ -511,3 +512,62 @@ def test_neighbours_refuses_a_direction_that_is_not_one(monkeypatch):
         call_graph._function_neighbours(0x100, "sideways")
     with pytest.raises(ValueError, match="walks two ways"):
         call_graph._function_neighbours(0x100, call_graph.Direction.BOTH)
+
+
+@pytest.mark.parametrize("extra", [False, True])
+def test_full_budget_preserves_mutual_relation(monkeypatch, extra):
+    graph = {
+        (0x100, "callers"): [0x200],
+        (0x100, "callees"): ([0x300] if extra else []) + [0x200],
+    }
+    _fake_graph(monkeypatch, graph, bodies=True)
+    decompiled = []
+    monkeypatch.setattr(call_graph, "decompile_function",
+                        lambda ea: decompiled.append(ea) or "body")
+    result = call_graph.collect_call_graph_context(
+        0x100, direction="both", max_depth=2, max_functions=1)
+    assert len(result["neighbours"]) == 1
+    assert result["neighbours"][0]["relations"] == ["callee", "caller"]
+    assert result["limits"]["budget_exhausted"] is extra
+    assert decompiled == [0x100, 0x200]
+
+
+def test_function_name_resolves_to_root(monkeypatch):
+    _fake_graph(monkeypatch, {})
+    def resolve(ea=None, name=None):
+        if name == "btel::TimeSource::clock":
+            return SimpleNamespace(start_ea=0x100)
+        raise ValueError("Name not found")
+    monkeypatch.setattr(call_graph, "resolve_func", resolve)
+    result = call_graph.collect_call_graph_context("btel::TimeSource::clock", max_depth=0)
+    assert result["root"]["ea"] == "0x100"
+    with pytest.raises(ValueError, match="Name not found"):
+        call_graph.collect_call_graph_context("missing_function")
+
+
+def test_named_root_matches_address_forms_in_ida(create_idb, monkeypatch):
+    named = call_graph.collect_call_graph_context("main", max_depth=0)
+    address = int(named["root"]["ea"], 16)
+    monkeypatch.setattr(call_graph, "safe_get_screen_ea", lambda: address)
+    for value in (address, hex(address), str(address), f"{address:X}h", None):
+        assert call_graph.collect_call_graph_context(value, max_depth=0) == named
+
+
+def test_full_budget_finishes_relations_at_deeper_depth(monkeypatch):
+    _fake_graph(monkeypatch, {
+        (0x100, "callers"): [0x200, 0x300],
+        (0x100, "callees"): [0x300],
+        (0x300, "callees"): [0x200],
+    })
+    result = call_graph.collect_call_graph_context(
+        0x100, max_depth=2, max_functions=2)
+    assert [n["relations"] for n in result["neighbours"]] == [
+        ["callee", "caller"], ["callee", "caller"]]
+    assert result["limits"]["budget_exhausted"] is False
+
+
+def test_zero_function_budget_reports_omitted_neighbours(monkeypatch):
+    _fake_graph(monkeypatch, {(0x100, "callees"): [0x200]})
+    result = call_graph.collect_call_graph_context(0x100, max_functions=0)
+    assert result["neighbours"] == []
+    assert result["limits"]["budget_exhausted"] is True
