@@ -28,6 +28,7 @@ QT_VERSION = None
 QT5 = False
 QT6 = False
 TEXT_SELECTABLE = None
+QShortcut: Any = None
 
 
 def flag_or(*flags):
@@ -92,7 +93,12 @@ def _import_binding():
 
 def _adopt(name, version, core, gui, widgets):
     global QtCore, QtGui, QtWidgets, binding, QT_VERSION, QT5, QT6, TEXT_SELECTABLE
+    global QShortcut
     QtCore, QtGui, QtWidgets = core, gui, widgets
+    # Qt5 uses QtWidgets; Qt6 (including IDA's PyQt5 shim) uses QtGui.
+    QShortcut = getattr(gui, "QShortcut", None)
+    if QShortcut is None:
+        QShortcut = widgets.QShortcut
     binding, QT_VERSION = name, version
     QT5, QT6 = version == 5, version == 6
 

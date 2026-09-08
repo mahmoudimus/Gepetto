@@ -13,7 +13,7 @@ that can be resized.
 
 from gepetto.ida.status_panel.panel_controls import register_prompt_button
 from gepetto.ida.status_panel.prompt_sizing import visible_height
-from gepetto.ida.qt import QtCore, QtGui, QtWidgets
+from gepetto.ida.qt import QShortcut, QtCore, QtGui, QtWidgets
 
 import gepetto.config
 
@@ -145,7 +145,7 @@ class PromptWindow(QtWidgets.QDialog):
         layout.addWidget(buttons)
 
         for sequence in ("Ctrl+Return", "Ctrl+Enter"):
-            QtGui.QShortcut(QtGui.QKeySequence(sequence), self, self.accept)
+            QShortcut(QtGui.QKeySequence(sequence), self, self.accept)
 
     def text(self):
         return self.editor.toPlainText()
